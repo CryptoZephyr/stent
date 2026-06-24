@@ -5,6 +5,9 @@
   "description": "No-code x402 reverse proxy — monetize any API per request in USDC via Circle Gateway batched settlement on Arc.",
   "license": "MIT",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "workspaces": [
     "packages/*",
     "apps/*"
