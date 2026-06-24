@@ -1,0 +1,46 @@
+# Secrets — NEVER commit
+.env
+.env.*
+*.pem
+*.key
+wallets.json
+.circle-entity-secret*
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Builds
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+Thumbs.db
+
+# Supabase local
+supabase/.branches
+supabase/.temp
+
+# Internal docs — only readme.md is published
+*.md
+!readme.md
+
+# Local Claude Code settings / plans
+.claude/
+
+# Personal / local-only — not published
+scripts/
+supabase/seed.sql
+apps/demo-agent/
+apps/demo-origin/
