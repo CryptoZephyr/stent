@@ -1,0 +1,21 @@
+{
+  "name": "@stent/demo-origin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unmodified upstream API serving the three Stent demo endpoints. Has no payment logic — Stent sits in front of it.",
+  "license": "MIT",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21"
+  }
+}
