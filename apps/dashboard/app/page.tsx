@@ -82,6 +82,8 @@ const agent = new StentClient({
   spendCapUsdc: 1.00,                         // safety cap
 });
 
+// one-time setup: faucet.circle.com for testnet USDC, then agent.deposit("10")
+
 // discovers the 402, pays in USDC, returns the data
 const data = await agent.fetch(
   "https://stentproxy-production.up.railway.app/arc-stats",

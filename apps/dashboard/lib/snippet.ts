@@ -13,6 +13,9 @@ const client = new StentClient({
   spendCapUsdc: 1.00,                          // safety cap
 });
 
+// One-time setup: get testnet USDC from faucet.circle.com, then fund Gateway.
+// await client.deposit("10");
+
 // Detects the 402, pays in USDC, retries, returns your data — automatically.
 const data = await client.fetch("${endpointUrl(slug)}");
 console.log(data);`;

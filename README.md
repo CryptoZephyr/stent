@@ -140,6 +140,10 @@ const client = new StentClient({
   spendCapUsdc: 1,
 });
 
+// One-time setup: get testnet USDC from https://faucet.circle.com, then fund
+// the Gateway balance this client pays from.
+await client.deposit("10");
+
 const data = await client.fetch("https://stentproxy-production.up.railway.app/arc-stats");
 console.log(data);
 ```
