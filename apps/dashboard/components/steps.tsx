@@ -411,6 +411,12 @@ export function VerifyStep({
           <CodeBlock
             code={`app.get("/stent-verification.txt", (_req, res) =>\n  res.type("text/plain").send("${reg.verification_token}")\n);`}
           />
+          <p style={{ marginTop: 10 }}>
+            Can&apos;t add a file at your domain&apos;s root — shared hosting, a managed API
+            gateway, or a subpath-only deployment? Verification isn&apos;t supported for that
+            setup yet. Host this API on a domain or subdomain you control directly, then
+            register it with that URL instead.
+          </p>
         </div>
       </details>
 
