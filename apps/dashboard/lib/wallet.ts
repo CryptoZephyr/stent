@@ -23,6 +23,17 @@ export async function connectInjected(): Promise<string> {
   return addr;
 }
 
+/** Sign a message with the injected wallet (used to authorize endpoint changes). */
+export async function signMessage(address: string, message: string): Promise<string> {
+  const eth = injected();
+  if (!eth) throw new Error("no_wallet");
+  const signature = (await eth.request({
+    method: "personal_sign",
+    params: [message, address],
+  })) as string;
+  return signature;
+}
+
 export function isAddress(a: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/.test(a.trim());
 }

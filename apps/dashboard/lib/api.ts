@@ -111,6 +111,46 @@ export interface EndpointSummary {
   created_at: string;
 }
 
+/** Must match the proxy's registration.ts `buildPatchOwnershipMessage` exactly. */
+export function buildPatchOwnershipMessage(input: {
+  slug: string;
+  publisher_wallet: string;
+  active: boolean;
+  issued_at: string;
+}): string {
+  return [
+    "Stent endpoint update",
+    `slug: ${input.slug}`,
+    `publisher_wallet: ${input.publisher_wallet.toLowerCase()}`,
+    `active: ${input.active ? "true" : "false"}`,
+    `issued_at: ${input.issued_at}`,
+  ].join("\n");
+}
+
+export async function setEndpointActive(
+  slug: string,
+  input: { publisher_wallet: string; active: boolean; issued_at: string; signature: string }
+): Promise<ApiResult<{ slug: string; active: boolean }>> {
+  let res: Response;
+  try {
+    res = await fetch(`${base}/${encodeURIComponent(slug)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  } catch {
+    return { ok: false, error: NET_ERR, status: 0 };
+  }
+  const body = await res.json().catch(() => ({}));
+  if (res.ok) return { ok: true, data: body as { slug: string; active: boolean } };
+  if (res.status === 403)
+    return { ok: false, error: "Wrong wallet — only the endpoint's payout address can change this.", status: 403 };
+  if (res.status === 401) return { ok: false, error: "Signature expired — try again.", status: 401 };
+  if (res.status === 404) return { ok: false, error: "Endpoint not found.", status: 404 };
+  if (res.status === 429) return { ok: false, error: "Too many attempts. Wait a minute and retry.", status: 429 };
+  return { ok: false, error: "Couldn't update the endpoint.", status: res.status };
+}
+
 export async function listEndpoints(): Promise<ApiResult<EndpointSummary[]>> {
   let res: Response;
   try {

@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { getStatus, type EndpointStatus } from "@/lib/api";
+import { getStatus, buildPatchOwnershipMessage, setEndpointActive, type EndpointStatus } from "@/lib/api";
 import { endpointUrl } from "@/lib/snippet";
-import { shortAddr } from "@/lib/wallet";
+import { shortAddr, connectInjected, signMessage } from "@/lib/wallet";
 import { StatusBadge, Copy } from "./ui";
 
 export function StatusLookup() {
@@ -12,16 +12,66 @@ export function StatusLookup() {
   const [res, setRes] = useState<EndpointStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  const [wallet, setWallet] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [patching, setPatching] = useState(false);
+  const [manageErr, setManageErr] = useState<string | null>(null);
+
   async function look() {
     const s = slug.trim();
     if (!s) return;
     setBusy(true);
     setErr(null);
     setRes(null);
+    setManageErr(null);
     const r = await getStatus(s);
     setBusy(false);
     if (r.ok) setRes(r.data);
     else setErr(r.error);
+  }
+
+  async function connect() {
+    setConnecting(true);
+    setManageErr(null);
+    try {
+      setWallet(await connectInjected());
+    } catch (e) {
+      const code = (e as Error).message;
+      setManageErr(
+        code === "no_wallet" ? "No browser wallet detected." : "Wallet connection was cancelled."
+      );
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function toggleActive() {
+    if (!res || !wallet) return;
+    setPatching(true);
+    setManageErr(null);
+    const nextActive = !res.active;
+    const issued_at = new Date().toISOString();
+    try {
+      const message = buildPatchOwnershipMessage({
+        slug: res.slug,
+        publisher_wallet: wallet,
+        active: nextActive,
+        issued_at,
+      });
+      const signature = await signMessage(wallet, message);
+      const r = await setEndpointActive(res.slug, {
+        publisher_wallet: wallet,
+        active: nextActive,
+        issued_at,
+        signature,
+      });
+      if (r.ok) setRes({ ...res, active: r.data.active });
+      else setManageErr(r.error);
+    } catch (e) {
+      setManageErr(e instanceof Error && e.message === "no_wallet" ? "No browser wallet detected." : "Signature request was cancelled.");
+    } finally {
+      setPatching(false);
+    }
   }
 
   return (
@@ -81,6 +131,26 @@ export function StatusLookup() {
             <div className="inline-copy" style={{ marginTop: 12 }}>
               <code>{endpointUrl(res.slug)}</code>
               <Copy text={endpointUrl(res.slug)} label="Copy URL" />
+            </div>
+          )}
+
+          {res.verified && (
+            <div style={{ marginTop: 16 }}>
+              {!wallet ? (
+                <button className="btn btn-ghost" onClick={connect} disabled={connecting}>
+                  {connecting ? "Connecting…" : "Connect wallet to manage"}
+                </button>
+              ) : wallet.toLowerCase() !== res.publisher_wallet.toLowerCase() ? (
+                <div className="notice step">
+                  Connected wallet doesn&apos;t match this endpoint&apos;s payout address — only
+                  the owner can pause or resume it.
+                </div>
+              ) : (
+                <button className="btn btn-primary" onClick={toggleActive} disabled={patching}>
+                  {patching ? "Saving…" : res.active ? "Pause endpoint" : "Resume endpoint"}
+                </button>
+              )}
+              {manageErr && <div className="notice err">{manageErr}</div>}
             </div>
           )}
         </div>
