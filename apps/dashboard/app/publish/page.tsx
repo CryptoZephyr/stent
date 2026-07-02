@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { PROXY_URL, NETWORK_LABEL } from "@/lib/config";
 import { ConnectStep, RegisterStep, VerifyStep, LiveStep } from "@/components/steps";
 import { StatusLookup } from "@/components/StatusLookup";
+import { PublisherLookup } from "@/components/PublisherLookup";
 import type { RegisterInput, RegisterOk, RegisterDraft } from "@/lib/api";
 import { EMPTY_REGISTER_DRAFT } from "@/lib/api";
 import { listPending, savePending, removePending, type PendingReg } from "@/lib/storage";
@@ -184,6 +185,8 @@ export default function Page() {
         <section className="lookup">
           <div className="divider" />
           <StatusLookup />
+          <div className="divider" />
+          <PublisherLookup />
         </section>
       )}
 

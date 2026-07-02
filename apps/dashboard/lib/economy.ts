@@ -185,6 +185,38 @@ export function endpointStatsBySlug(rows: PaymentRow[]): Map<string, EndpointSta
   return m;
 }
 
+export interface PublisherEndpointEarnings {
+  slug: string;
+  usdc: number;
+  calls: number;
+  lastActiveAt: string | null;
+}
+
+/**
+ * Per-endpoint earnings for one publisher wallet, computed from an
+ * already-fetched, newest-first payments array — the same public rows the
+ * leaderboards already aggregate, just scoped to one publisher and one
+ * endpoint at a time instead of ranked across everyone.
+ */
+export function publisherEarningsBySlug(
+  rows: PaymentRow[],
+  publisherWallet: string
+): Map<string, PublisherEndpointEarnings> {
+  const wallet = publisherWallet.toLowerCase();
+  const m = new Map<string, PublisherEndpointEarnings>();
+  for (const r of rows) {
+    if (r.publisher_wallet !== wallet) continue;
+    const e = m.get(r.endpoint_slug);
+    if (e) {
+      e.calls += 1;
+      e.usdc = Math.round((e.usdc + r.amount_usdc) * 1e6) / 1e6;
+    } else {
+      m.set(r.endpoint_slug, { slug: r.endpoint_slug, usdc: r.amount_usdc, calls: 1, lastActiveAt: r.created_at });
+    }
+  }
+  return m;
+}
+
 export function toActivity(
   rows: PaymentRow[],
   agentNames: Map<string, string>,
