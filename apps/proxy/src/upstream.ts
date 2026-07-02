@@ -1,5 +1,6 @@
 import type { Request } from "express";
 import type { EndpointConfig } from "./supabaseClient";
+import { fetchPublicUrl, PublicFetchError, type LookupFn } from "./verification";
 
 // Upstream fetch timeout. Read directly from the environment (not the `env`
 // module) so this file stays free of required-secret imports and is unit-testable.
@@ -62,27 +63,22 @@ export async function forwardToUpstream(
   targetUrl: string,
   method: string,
   reqHeaders: Record<string, string | string[] | undefined>,
-  body: Buffer | undefined
+  body: Buffer | undefined,
+  opts: { lookupImpl?: LookupFn; allowInsecureLoopback?: boolean } = {}
 ): Promise<ForwardResult> {
   const headers = filterUpstreamHeaders(reqHeaders);
 
-  const init: RequestInit = { method, headers };
-  if (body && body.length > 0 && method !== "GET" && method !== "HEAD") {
-    init.body = body;
-  }
-
-  // Bound the upstream fetch so a hung origin can't stall a settle indefinitely.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
   try {
-    const res = await fetch(targetUrl, { ...init, signal: controller.signal });
-    const buf = Buffer.from(await res.arrayBuffer());
-    return {
-      status: res.status,
-      contentType: res.headers.get("content-type") ?? "application/octet-stream",
-      body: buf,
-    };
-  } finally {
-    clearTimeout(timer);
+    return await fetchPublicUrl(targetUrl, {
+      method,
+      headers,
+      body: body && body.length > 0 && method !== "GET" && method !== "HEAD" ? body : undefined,
+      timeoutMs: UPSTREAM_TIMEOUT_MS,
+      lookupImpl: opts.lookupImpl,
+      allowInsecureLoopback: opts.allowInsecureLoopback,
+    });
+  } catch (err) {
+    if (err instanceof PublicFetchError) throw err;
+    throw new PublicFetchError("unreachable");
   }
 }

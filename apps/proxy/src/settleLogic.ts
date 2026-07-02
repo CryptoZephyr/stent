@@ -2,6 +2,7 @@ import { formatUnits } from "viem";
 import type { EndpointConfig } from "./supabaseClient";
 import type { ForwardResult } from "./upstream";
 import type { ProxyRequest } from "./requestContext";
+import { PublicFetchError } from "./verification";
 
 /**
  * Pure, dependency-injected decision logic for `onBeforeSettle`. Extracted from
@@ -58,6 +59,21 @@ export async function evaluateBeforeSettle(
   network: string,
   deps: SettleDeps
 ): Promise<SettleDecision> {
+  try {
+    return await evaluateBeforeSettleUnsafe(config, input, network, deps);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[payment] before-settle dependency failure:", message);
+    return { ok: false, reason: "internal_error" };
+  }
+}
+
+async function evaluateBeforeSettleUnsafe(
+  config: EndpointConfig,
+  input: SettleInput,
+  network: string,
+  deps: SettleDeps
+): Promise<SettleDecision> {
   const { nonce, payer, amountAtomic, req } = input;
   if (!nonce) return { ok: false, reason: "missing_nonce" };
   if (!req) return { ok: false, reason: "no_request_context" };
@@ -84,7 +100,13 @@ export async function evaluateBeforeSettle(
   let upstream: ForwardResult;
   try {
     upstream = await deps.fetchUpstream(config, req);
-  } catch {
+  } catch (err) {
+    if (err instanceof PublicFetchError) {
+      return {
+        ok: false,
+        reason: err.reason === "unreachable" ? "upstream_unavailable" : err.reason,
+      };
+    }
     return { ok: false, reason: "upstream_unavailable" };
   }
   if (upstream.status < 200 || upstream.status >= 300) {

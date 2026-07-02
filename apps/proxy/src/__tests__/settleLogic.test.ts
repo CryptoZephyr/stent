@@ -3,6 +3,7 @@ import { evaluateBeforeSettle, type SettleDeps } from "../settleLogic";
 import type { EndpointConfig } from "../supabaseClient";
 import type { ProxyRequest } from "../requestContext";
 import type { ForwardResult } from "../upstream";
+import { PublicFetchError } from "../verification";
 
 const NET = "eip155:5042002";
 
@@ -61,6 +62,20 @@ describe("evaluateBeforeSettle", () => {
     expect(decision).toMatchObject({ ok: false, reason: "payment_log_failed" });
   });
 
+  it("FAIL-CLOSED: a thrown replay check aborts instead of propagating to the SDK", async () => {
+    const d = deps({ replayExists: vi.fn(async () => { throw new Error("network down"); }) });
+    const decision = await evaluateBeforeSettle(config(), input, NET, d);
+    expect(decision).toMatchObject({ ok: false, reason: "internal_error" });
+    expect(d.fetchUpstream).not.toHaveBeenCalled();
+    expect(d.insertPayment).not.toHaveBeenCalled();
+  });
+
+  it("FAIL-CLOSED: a thrown DB insert aborts instead of propagating to the SDK", async () => {
+    const d = deps({ insertPayment: vi.fn(async () => { throw new Error("TCP reset"); }) });
+    const decision = await evaluateBeforeSettle(config(), input, NET, d);
+    expect(decision).toMatchObject({ ok: false, reason: "internal_error" });
+  });
+
   it("atomicity: upstream non-2xx aborts, no insert attempted", async () => {
     const upstream404: ForwardResult = { status: 404, contentType: "text/plain", body: Buffer.from("nope") };
     const d = deps({ fetchUpstream: vi.fn(async () => upstream404) });
@@ -74,6 +89,13 @@ describe("evaluateBeforeSettle", () => {
     const d = deps({ fetchUpstream: vi.fn(async () => { throw new Error("ECONNREFUSED"); }) });
     const decision = await evaluateBeforeSettle(config(), input, NET, d);
     expect(decision).toMatchObject({ ok: false, reason: "upstream_unavailable" });
+    expect(d.insertPayment).not.toHaveBeenCalled();
+  });
+
+  it("SSRF: blocked upstream targets abort with a specific blocked_target reason", async () => {
+    const d = deps({ fetchUpstream: vi.fn(async () => { throw new PublicFetchError("blocked_target"); }) });
+    const decision = await evaluateBeforeSettle(config(), input, NET, d);
+    expect(decision).toMatchObject({ ok: false, reason: "blocked_target" });
     expect(d.insertPayment).not.toHaveBeenCalled();
   });
 

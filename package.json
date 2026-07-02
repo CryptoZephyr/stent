@@ -10,14 +10,14 @@
   },
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/proxy",
+    "apps/demo-origin",
+    "apps/dashboard"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "dev:proxy": "npm run dev --workspace @stent/proxy",
     "dev:origin": "npm run dev --workspace @stent/demo-origin",
-    "start:agent": "npm run start --workspace @stent/demo-agent",
-    "generate-wallets": "tsx scripts/generate-wallets.ts",
     "test": "npm run test --workspaces --if-present",
     "test:proxy": "npm run test --workspace @stent/proxy"
   },
@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@circle-fin/x402-batching": "^3.2.0",
+    "@supabase/supabase-js": "^2.108.2",
     "@x402/core": "^2.16.0",
     "@x402/evm": "^2.16.0",
     "viem": "^2.21.0"

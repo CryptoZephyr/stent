@@ -13,6 +13,9 @@
  */
 import { isIP } from "node:net";
 import { lookup as dnsLookup } from "node:dns/promises";
+import { request as httpRequest, type RequestOptions } from "node:http";
+import { request as httpsRequest } from "node:https";
+import type { IncomingMessage } from "node:http";
 
 export interface VerifyResult {
   verified: boolean;
@@ -95,23 +98,39 @@ export function isBlockedIp(addr: string): boolean {
   return true; // not a valid IP → block
 }
 
+function normalizeHostname(h: string): string {
+  return h.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+}
+
 function isBlockedHostname(h: string): boolean {
+  const host = normalizeHostname(h);
+  return host === "localhost" || host.endsWith(".localhost");
+}
+
+function isLoopbackHostname(h: string): boolean {
   const host = h.trim().toLowerCase().replace(/\.$/, "");
   return host === "localhost" || host.endsWith(".localhost");
+}
+
+function isLoopbackIpLiteral(h: string): boolean {
+  const host = normalizeHostname(h);
+  return host === "127.0.0.1" || host === "::1";
 }
 
 /**
  * Resolve `hostname` and confirm every address it maps to is public/routable.
  * Returns `{ ok: false, reason: "blocked_target" }` for any disallowed target.
  */
-export async function assertPublicHost(
+export async function resolvePublicHost(
   hostname: string,
   lookup: LookupFn = realLookup
-): Promise<{ ok: true } | { ok: false; reason: string }> {
+): Promise<{ ok: true; addresses: LookupAddr[] } | { ok: false; reason: string }> {
   if (isBlockedHostname(hostname)) return { ok: false, reason: "blocked_target" };
 
   if (isIP(hostname)) {
-    return isBlockedIp(hostname) ? { ok: false, reason: "blocked_target" } : { ok: true };
+    return isBlockedIp(hostname)
+      ? { ok: false, reason: "blocked_target" }
+      : { ok: true, addresses: [{ address: normalizeHostname(hostname), family: isIP(hostname) }] };
   }
 
   let addrs: LookupAddr[];
@@ -125,7 +144,152 @@ export async function assertPublicHost(
   for (const a of addrs) {
     if (isBlockedIp(a.address)) return { ok: false, reason: "blocked_target" };
   }
-  return { ok: true };
+  return { ok: true, addresses: addrs };
+}
+
+export async function assertPublicHost(
+  hostname: string,
+  lookup: LookupFn = realLookup
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const resolved = await resolvePublicHost(hostname, lookup);
+  return resolved.ok ? { ok: true } : resolved;
+}
+
+export interface PublicFetchResult {
+  status: number;
+  contentType: string;
+  body: Buffer;
+}
+
+export class PublicFetchError extends Error {
+  constructor(public readonly reason: string) {
+    super(reason);
+  }
+}
+
+export async function fetchPublicUrl(
+  targetUrl: string,
+  opts: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: Buffer;
+    timeoutMs?: number;
+    lookupImpl?: LookupFn;
+    allowInsecureLoopback?: boolean;
+    maxRedirects?: number;
+  } = {}
+): Promise<PublicFetchResult> {
+  let url: URL;
+  try {
+    url = new URL(targetUrl);
+  } catch {
+    throw new PublicFetchError("invalid_target_url");
+  }
+  return fetchPublicUrlInner(url, opts, opts.maxRedirects ?? 5);
+}
+
+async function fetchPublicUrlInner(
+  url: URL,
+  opts: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: Buffer;
+    timeoutMs?: number;
+    lookupImpl?: LookupFn;
+    allowInsecureLoopback?: boolean;
+  },
+  redirectsLeft: number
+): Promise<PublicFetchResult> {
+  const host = url.hostname;
+  const isDevLoopback =
+    opts.allowInsecureLoopback && (isLoopbackHostname(host) || isLoopbackIpLiteral(host));
+  if (url.protocol !== "https:" && !(isDevLoopback && url.protocol === "http:")) {
+    throw new PublicFetchError("blocked_target");
+  }
+
+  let pinned: LookupAddr | undefined;
+  if (!isDevLoopback) {
+    const resolved = await resolvePublicHost(host, opts.lookupImpl);
+    if (!resolved.ok) throw new PublicFetchError(resolved.reason);
+    pinned = resolved.addresses[0];
+  }
+
+  const result = await requestPinned(url, opts, pinned);
+  const location = result.headers.location;
+  if (
+    result.status >= 300 &&
+    result.status < 400 &&
+    location &&
+    redirectsLeft > 0
+  ) {
+    const next = new URL(location, url);
+    const method = opts.method?.toUpperCase() ?? "GET";
+    const shouldDropBody =
+      result.status === 303 || ((result.status === 301 || result.status === 302) && method === "POST");
+    return fetchPublicUrlInner(
+      next,
+      shouldDropBody
+        ? { ...opts, method: "GET", body: undefined }
+        : opts,
+      redirectsLeft - 1
+    );
+  }
+  return {
+    status: result.status,
+    contentType: result.headers["content-type"] ?? "application/octet-stream",
+    body: result.body,
+  };
+}
+
+function requestPinned(
+  url: URL,
+  opts: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: Buffer;
+    timeoutMs?: number;
+  },
+  pinned?: LookupAddr
+): Promise<{ status: number; headers: Record<string, string>; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const requester = url.protocol === "https:" ? httpsRequest : httpRequest;
+    const requestOpts: RequestOptions = {
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port,
+      path: `${url.pathname}${url.search}`,
+      method: opts.method ?? "GET",
+      headers: opts.headers,
+      timeout: opts.timeoutMs ?? 5000,
+      lookup: pinned
+        ? (_hostname, _options, cb) => cb(null, pinned.address, pinned.family)
+        : undefined,
+    };
+    const req = requester(requestOpts, (res: IncomingMessage) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      res.on("end", () =>
+        resolve({
+          status: res.statusCode ?? 0,
+          headers: lowerHeaders(res.headers),
+          body: Buffer.concat(chunks),
+        })
+      );
+    });
+    req.on("error", () => reject(new PublicFetchError("unreachable")));
+    req.on("timeout", () => req.destroy(new PublicFetchError("unreachable")));
+    if (opts.body && opts.body.length > 0) req.write(opts.body);
+    req.end();
+  });
+}
+
+function lowerHeaders(headers: IncomingMessage["headers"]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value === "string") out[key.toLowerCase()] = value;
+    else if (Array.isArray(value)) out[key.toLowerCase()] = value.join(", ");
+  }
+  return out;
 }
 
 // ── Verification ──────────────────────────────────────────────────────────────
@@ -145,21 +309,38 @@ export async function verifyOwnership(
     return { verified: false, reason: "invalid_target_url" };
   }
 
-  // SSRF guard — resolve + validate the host BEFORE any request leaves the server.
-  const guard = await assertPublicHost(url.hostname, opts.lookupImpl);
-  if (!guard.ok) return { verified: false, reason: guard.reason };
-
-  const doFetch = opts.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 5000);
   try {
-    const res = await doFetch(`${url.origin}${VERIFICATION_PATH}`, { signal: controller.signal });
-    if (!res.ok) return { verified: false, reason: `fetch_status_${res.status}` };
-    const found = (await res.text()).trim();
+    let status: number;
+    let text: string;
+    if (opts.fetchImpl) {
+      // Tests and explicit callers can inject fetch; production uses the pinned
+      // request path below to avoid DNS rebinding between validation and connect.
+      const guard = await assertPublicHost(url.hostname, opts.lookupImpl);
+      if (!guard.ok) return { verified: false, reason: guard.reason };
+      const res = await opts.fetchImpl(`${url.origin}${VERIFICATION_PATH}`, {
+        signal: controller.signal,
+      });
+      status = res.status;
+      text = await res.text();
+    } else {
+      const res = await fetchPublicUrl(`${url.origin}${VERIFICATION_PATH}`, {
+        timeoutMs: opts.timeoutMs ?? 5000,
+        lookupImpl: opts.lookupImpl,
+      });
+      status = res.status;
+      text = res.body.toString("utf8");
+    }
+    if (status < 200 || status >= 300) return { verified: false, reason: `fetch_status_${status}` };
+    const found = text.trim();
     return found === expected
       ? { verified: true, found }
       : { verified: false, reason: "token_mismatch", found };
-  } catch {
+  } catch (err) {
+    if (err instanceof PublicFetchError && err.reason !== "unreachable") {
+      return { verified: false, reason: err.reason };
+    }
     return { verified: false, reason: "unreachable" };
   } finally {
     clearTimeout(timer);

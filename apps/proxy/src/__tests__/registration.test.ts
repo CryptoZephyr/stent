@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { validateRegistration } from "../registration";
+import { privateKeyToAccount } from "viem/accounts";
+import {
+  buildPatchOwnershipMessage,
+  validateRegistration,
+  verifyPatchOwnership,
+} from "../registration";
 
 const base = {
   slug: "weather-api",
@@ -59,5 +64,57 @@ describe("validateRegistration", () => {
       expect(r.value.rate_limit_rpm).toBe(100_000);
       expect(r.value.agent_limit_rpm).toBe(1);
     }
+  });
+});
+
+describe("verifyPatchOwnership", () => {
+  const account = privateKeyToAccount(
+    "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  );
+  const issued_at = "2026-07-02T12:00:00.000Z";
+  const now = Date.parse(issued_at);
+
+  it("rejects the old public-wallet-only PATCH shape", async () => {
+    const result = await verifyPatchOwnership(
+      "weather-api",
+      account.address,
+      { publisher_wallet: account.address, active: false },
+      { now }
+    );
+    expect(result).toMatchObject({ ok: false, status: 401, error: "signature_expired" });
+  });
+
+  it("accepts a fresh signature bound to slug, wallet, active state, and timestamp", async () => {
+    const message = buildPatchOwnershipMessage({
+      slug: "weather-api",
+      publisher_wallet: account.address,
+      active: false,
+      issued_at,
+    });
+    const signature = await account.signMessage({ message });
+    const result = await verifyPatchOwnership(
+      "weather-api",
+      account.address,
+      { publisher_wallet: account.address, active: false, issued_at, signature },
+      { now }
+    );
+    expect(result).toMatchObject({ ok: true, active: false });
+  });
+
+  it("rejects replaying a signature for a different active state", async () => {
+    const message = buildPatchOwnershipMessage({
+      slug: "weather-api",
+      publisher_wallet: account.address,
+      active: false,
+      issued_at,
+    });
+    const signature = await account.signMessage({ message });
+    const result = await verifyPatchOwnership(
+      "weather-api",
+      account.address,
+      { publisher_wallet: account.address, active: true, issued_at, signature },
+      { now }
+    );
+    expect(result).toMatchObject({ ok: false, status: 403, error: "invalid_signature" });
   });
 });

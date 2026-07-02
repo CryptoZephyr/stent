@@ -9,12 +9,16 @@ import { getPaymentHandler } from "./gateway";
 import { runWithRequestContext, type ProxyRequest } from "./requestContext";
 import { createRegistrationRouter } from "./registration";
 
+const TRUST_PROXY = process.env.TRUST_PROXY_HOPS
+  ? Number(process.env.TRUST_PROXY_HOPS)
+  : 1;
+
 export function createServer() {
   const app = express();
   app.disable("x-powered-by");
-  // Behind a PaaS load balancer (Railway), trust X-Forwarded-* so req.ip is the
-  // real client — otherwise the per-IP flood guard buckets all traffic as the LB.
-  app.set("trust proxy", true);
+  // Behind a PaaS load balancer (Railway), trust only the known front proxy hop
+  // so clients cannot spoof req.ip by supplying arbitrary X-Forwarded-For values.
+  app.set("trust proxy", TRUST_PROXY);
 
   app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
@@ -57,12 +61,11 @@ function resolveEndpoint(req: ProxyRequest, res: Response, next: NextFunction) {
 // of the unauthenticated request path; the *economic* per-endpoint and per-agent
 // limits live in the settle path (gateway.ts) so an unpaid 402 flood cannot
 // exhaust a publisher's paid allowance.
-const IP_FLOOD_RPM = Number(process.env.IP_FLOOD_RPM ?? 600);
-
 /** Step 2 — per-IP flood guard. */
 function ipFloodGuard(req: ProxyRequest, res: Response, next: NextFunction) {
   const ip = req.ip ?? req.socket.remoteAddress ?? "unknown";
-  const { allowed, retryAfterSec } = rateLimiter.hit(`ip:${ip}`, IP_FLOOD_RPM);
+  const ipFloodRpm = Number(process.env.IP_FLOOD_RPM ?? 600);
+  const { allowed, retryAfterSec } = rateLimiter.hit(`ip:${ip}`, ipFloodRpm);
   if (!allowed) {
     res.setHeader("Retry-After", String(retryAfterSec));
     res.status(429).json({ error: "ip_rate_limited", retry_after_sec: retryAfterSec });
@@ -81,9 +84,10 @@ function ipFloodGuard(req: ProxyRequest, res: Response, next: NextFunction) {
 async function requirePayment(req: ProxyRequest, res: Response, next: NextFunction) {
   const handler = getPaymentHandler(req.endpoint!);
   type Mw = (r: ProxyRequest, s: Response, n: NextFunction) => void | Promise<void>;
+  const wrappedRes = wrapSettleAbortResponse(req, res);
   try {
     await runWithRequestContext({ req }, () =>
-      Promise.resolve((handler as unknown as Mw)(req, res, next))
+      Promise.resolve((handler as unknown as Mw)(req, wrappedRes as Response, next))
     );
   } catch (err) {
     if (res.headersSent) return;
@@ -108,20 +112,27 @@ function forward(req: ProxyRequest, res: Response) {
  * to a client response. For an upstream non-2xx we relay the real upstream
  * status/body the agent was trying to reach — unpaid.
  */
-function respondForSettleAbort(req: ProxyRequest, res: Response, err: unknown) {
-  const msg = err instanceof Error ? err.message : String(err);
-  const reason = /Settlement aborted:\s*(.+)$/i.exec(msg)?.[1]?.trim() ?? "settlement_error";
-
+function abortResponseForReason(req: ProxyRequest, reason: string): {
+  status: number;
+  headers?: Record<string, string>;
+  body?: Buffer | object;
+  contentType?: string;
+} {
   if (reason.startsWith("upstream_status_") && req.stentUpstream) {
-    res.status(req.stentUpstream.status);
-    res.setHeader("Content-Type", req.stentUpstream.contentType);
-    res.send(req.stentUpstream.body);
-    return;
+    return {
+      status: req.stentUpstream.status,
+      headers: { "Content-Type": req.stentUpstream.contentType },
+      body: req.stentUpstream.body,
+    };
   }
 
   const statusByReason: Record<string, number> = {
-    upstream_unavailable: 502,
+    upstream_unavailable: 503,
+    blocked_target: 502,
+    unresolvable: 502,
+    invalid_target_url: 502,
     payment_log_failed: 500,
+    internal_error: 500,
     replay: 409,
     agent_rate_limited: 429,
     endpoint_rate_limited: 429,
@@ -129,8 +140,84 @@ function respondForSettleAbort(req: ProxyRequest, res: Response, err: unknown) {
     no_request_context: 500,
   };
   const status = statusByReason[reason] ?? 500;
-  if (reason === "agent_rate_limited" || reason === "endpoint_rate_limited") {
-    res.setHeader("Retry-After", "60");
+  const headers =
+    reason === "agent_rate_limited" || reason === "endpoint_rate_limited"
+      ? { "Retry-After": "60" }
+      : undefined;
+  return { status, headers, body: { error: reason } };
+}
+
+function sendAbortResponse(req: ProxyRequest, res: Response, reason: string) {
+  const response = abortResponseForReason(req, reason);
+  if (response.headers) {
+    for (const [key, value] of Object.entries(response.headers)) res.setHeader(key, value);
   }
-  res.status(status).json({ error: reason });
+  res.status(response.status);
+  if (Buffer.isBuffer(response.body)) {
+    res.send(response.body);
+    return;
+  }
+  res.json(response.body ?? { error: reason });
+}
+
+function respondForSettleAbort(req: ProxyRequest, res: Response, err: unknown) {
+  const msg = err instanceof Error ? err.message : String(err);
+  const reason = /Settlement aborted:\s*(.+)$/i.exec(msg)?.[1]?.trim() ?? "settlement_error";
+  sendAbortResponse(req, res, reason);
+}
+
+type WritableChunk = string | Buffer | Uint8Array;
+
+function wrapSettleAbortResponse(req: ProxyRequest, res: Response): Response {
+  const originalEnd = res.end.bind(res);
+  const originalSetHeader = res.setHeader.bind(res);
+  const originalStatusCode = res.statusCode;
+
+  res.end = ((chunk?: WritableChunk, encodingOrCb?: BufferEncoding | (() => void), cb?: () => void) => {
+    const body = typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf8") : "";
+    const reason = parseSdkSettleAbortReason(res.statusCode, body);
+    if (reason) {
+      const response = abortResponseForReason(req, reason);
+      res.statusCode = response.status;
+      if (response.headers) {
+        for (const [key, value] of Object.entries(response.headers)) originalSetHeader(key, value);
+      }
+      if (Buffer.isBuffer(response.body)) {
+        originalSetHeader("Content-Length", String(response.body.length));
+        return originalEnd(response.body, cb ?? (typeof encodingOrCb === "function" ? encodingOrCb : undefined));
+      }
+      originalSetHeader("Content-Type", "application/json");
+      const nextBody = JSON.stringify(response.body ?? { error: reason });
+      originalSetHeader("Content-Length", String(Buffer.byteLength(nextBody)));
+      return originalEnd(
+        nextBody,
+        cb ?? (typeof encodingOrCb === "function" ? encodingOrCb : undefined)
+      );
+    }
+    res.statusCode = res.statusCode || originalStatusCode;
+    return originalEnd(
+      chunk as never,
+      encodingOrCb as never,
+      cb as never
+    );
+  }) as Response["end"];
+
+  return res;
+}
+
+function parseSdkSettleAbortReason(statusCode: number, body: string): string | null {
+  if (statusCode !== 402 || !body) return null;
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown; reason?: unknown };
+    if (
+      parsed.error === "Payment settlement aborted" &&
+      typeof parsed.reason === "string" &&
+      parsed.reason.length > 0
+    ) {
+      return parsed.reason;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }

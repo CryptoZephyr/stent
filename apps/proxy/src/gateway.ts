@@ -49,22 +49,36 @@ function realSettleDeps(): SettleDeps {
     agentRateLimit: (slug, payer, limit) =>
       rateLimiter.hit(`agent:${slug}:${payer}`, limit).allowed,
     replayExists: async (nonce) => {
-      const { data, error } = await supabase
-        .from("payments")
-        .select("gateway_authorization_id")
-        .eq("gateway_authorization_id", nonce)
-        .maybeSingle();
-      return { exists: !!data, error: !!error };
+      try {
+        const { data, error } = await supabase
+          .from("payments")
+          .select("gateway_authorization_id")
+          .eq("gateway_authorization_id", nonce)
+          .maybeSingle();
+        return { exists: !!data, error: !!error };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("[payment] replay check failed:", message);
+        return { exists: false, error: true };
+      }
     },
     fetchUpstream: (config, req) => {
       const target = resolveTargetUrl(config, req);
       const body = Buffer.isBuffer(req.body) ? (req.body as Buffer) : undefined;
-      return forwardToUpstream(target, req.method, req.headers, body);
+      return forwardToUpstream(target, req.method, req.headers, body, {
+        allowInsecureLoopback: process.env.STENT_ALLOW_INSECURE_TARGETS === "true",
+      });
     },
     insertPayment: async (row) => {
-      const { error } = await supabase.from("payments").insert(row);
-      if (!error) return { ok: true, duplicate: false };
-      return { ok: false, duplicate: /duplicate key|unique/i.test(error.message) };
+      try {
+        const { error } = await supabase.from("payments").insert(row);
+        if (!error) return { ok: true, duplicate: false };
+        return { ok: false, duplicate: /duplicate key|unique/i.test(error.message) };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("[payment] insert failed:", message);
+        return { ok: false, duplicate: false };
+      }
     },
   };
 }
@@ -104,28 +118,34 @@ export function getPaymentHandler(config: EndpointConfig): RequireHandler {
   });
 
   gateway.onBeforeSettle(async (ctx) => {
-    const auth = extractAuthorization(ctx.paymentPayload);
-    const store = getRequestContext();
-    const decision = await evaluateBeforeSettle(
-      config,
-      {
-        nonce: auth.nonce,
-        payer: auth.from,
-        amountAtomic: ctx.requirements.amount,
-        req: store?.req,
-      },
-      env.network,
-      settleDeps
-    );
-    // Stash the fetched upstream body so forward()/error-relay can return it
-    // without re-hitting the origin (single upstream hit per request).
-    if (store?.req && decision.upstream) store.req.stentUpstream = decision.upstream;
-    if (!decision.ok) {
-      console.error(`[payment] ${config.slug} aborted: ${decision.reason}`);
-      return { abort: true, reason: decision.reason };
+    try {
+      const auth = extractAuthorization(ctx.paymentPayload);
+      const store = getRequestContext();
+      const decision = await evaluateBeforeSettle(
+        config,
+        {
+          nonce: auth.nonce,
+          payer: auth.from,
+          amountAtomic: ctx.requirements.amount,
+          req: store?.req,
+        },
+        env.network,
+        settleDeps
+      );
+      // Stash the fetched upstream body so forward()/error-relay can return it
+      // without re-hitting the origin (single upstream hit per request).
+      if (store?.req && decision.upstream) store.req.stentUpstream = decision.upstream;
+      if (!decision.ok) {
+        console.error(`[payment] ${config.slug} aborted: ${decision.reason}`);
+        return { abort: true, reason: decision.reason };
+      }
+      console.log(`[payment] ${config.slug} ${decision.row.agent_address} $${decision.row.amount_usdc} — row written, settling`);
+      return; // settlement proceeds
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[payment] ${config.slug} before-settle exception: ${message}`);
+      return { abort: true, reason: "internal_error" };
     }
-    console.log(`[payment] ${config.slug} ${decision.row.agent_address} $${decision.row.amount_usdc} — row written, settling`);
-    return; // settlement proceeds
   });
 
   gateway.onAfterSettle(async (ctx) => {

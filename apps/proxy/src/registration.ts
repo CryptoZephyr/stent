@@ -17,7 +17,7 @@
  *  - Per-IP registration rate limit; hard input validation.
  */
 import express, { Router } from "express";
-import { isAddress } from "viem";
+import { isAddress, verifyMessage } from "viem";
 import { randomBytes } from "node:crypto";
 import { supabase } from "./supabaseClient";
 import { verifyOwnership } from "./verification";
@@ -28,6 +28,7 @@ const RESERVED_SLUGS = new Set(["healthz", "_api", "stent-verification"]);
 const ALLOW_INSECURE = process.env.STENT_ALLOW_INSECURE_TARGETS === "true";
 const REGISTER_RPM = Number(process.env.REGISTER_RPM ?? 20);
 const CORS_ORIGIN = process.env.STENT_DASHBOARD_ORIGIN ?? "*";
+const PATCH_SIGNATURE_TTL_MS = 5 * 60 * 1000;
 
 export interface RegistrationInput {
   slug?: unknown;
@@ -47,6 +48,13 @@ export interface ValidatedRegistration {
   description: string | null;
   rate_limit_rpm: number;
   agent_limit_rpm: number;
+}
+
+export interface PatchOwnershipInput {
+  publisher_wallet?: unknown;
+  active?: unknown;
+  issued_at?: unknown;
+  signature?: unknown;
 }
 
 function clampInt(v: unknown, def: number, min: number, max: number): number {
@@ -101,12 +109,71 @@ export function validateRegistration(
   };
 }
 
+export function buildPatchOwnershipMessage(input: {
+  slug: string;
+  publisher_wallet: string;
+  active: boolean;
+  issued_at: string;
+}): string {
+  return [
+    "Stent endpoint update",
+    `slug: ${input.slug}`,
+    `publisher_wallet: ${input.publisher_wallet.toLowerCase()}`,
+    `active: ${input.active ? "true" : "false"}`,
+    `issued_at: ${input.issued_at}`,
+  ].join("\n");
+}
+
+export async function verifyPatchOwnership(
+  slug: string,
+  ownerWallet: string,
+  body: PatchOwnershipInput,
+  opts: { now?: number } = {}
+): Promise<
+  | { ok: true; publisher_wallet: string; active: boolean }
+  | { ok: false; status: number; error: string }
+> {
+  const publisher_wallet = String(body.publisher_wallet ?? "").trim();
+  if (!publisher_wallet || !isAddress(publisher_wallet)) {
+    return { ok: false, status: 400, error: "publisher_wallet required" };
+  }
+  if (publisher_wallet.toLowerCase() !== ownerWallet.toLowerCase()) {
+    return { ok: false, status: 403, error: "wallet_mismatch" };
+  }
+  if (typeof body.active !== "boolean") {
+    return { ok: false, status: 400, error: "active (boolean) required" };
+  }
+  const issued_at = String(body.issued_at ?? "").trim();
+  const issuedMs = Date.parse(issued_at);
+  const now = opts.now ?? Date.now();
+  if (!issued_at || !Number.isFinite(issuedMs) || Math.abs(now - issuedMs) > PATCH_SIGNATURE_TTL_MS) {
+    return { ok: false, status: 401, error: "signature_expired" };
+  }
+  const signature = String(body.signature ?? "").trim();
+  if (!/^0x[a-fA-F0-9]+$/.test(signature)) {
+    return { ok: false, status: 401, error: "signature_required" };
+  }
+  const message = buildPatchOwnershipMessage({
+    slug,
+    publisher_wallet,
+    active: body.active,
+    issued_at,
+  });
+  const valid = await verifyMessage({
+    address: publisher_wallet as `0x${string}`,
+    message,
+    signature: signature as `0x${string}`,
+  }).catch(() => false);
+  if (!valid) return { ok: false, status: 403, error: "invalid_signature" };
+  return { ok: true, publisher_wallet, active: body.active };
+}
+
 export function createRegistrationRouter(): Router {
   const router = Router();
   router.use(express.json({ limit: "16kb" }));
   router.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", CORS_ORIGIN);
-    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "content-type");
     if (req.method === "OPTIONS") {
       res.sendStatus(204);
@@ -153,10 +220,13 @@ export function createRegistrationRouter(): Router {
   });
 
   // Prove ownership → flip verified. The proxy cache picks it up via realtime.
+  // Security: this endpoint can only VERIFY (false→true), never UN-VERIFY.
+  // An already-verified endpoint returns 200 idempotently with no DB write.
+  // A failed verification on an unverified endpoint returns 422 with no DB write.
   router.post("/endpoints/:slug/verify", async (req, res) => {
     const { data: ep, error } = await supabase
       .from("endpoints")
-      .select("slug, target_url, verification_token")
+      .select("slug, target_url, verification_token, verified")
       .eq("slug", req.params.slug)
       .maybeSingle();
     if (error) {
@@ -167,18 +237,24 @@ export function createRegistrationRouter(): Router {
       res.status(404).json({ error: "not_found" });
       return;
     }
+    if (ep.verified) {
+      res.status(200).json({ slug: req.params.slug, verified: true, reason: "already_verified" });
+      return;
+    }
     const result = await verifyOwnership(ep.target_url, ep.verification_token);
+    if (!result.verified) {
+      res.status(422).json({ slug: req.params.slug, verified: false, reason: result.reason });
+      return;
+    }
     const { error: upErr } = await supabase
       .from("endpoints")
-      .update({ verified: result.verified })
+      .update({ verified: true })
       .eq("slug", req.params.slug);
     if (upErr) {
       res.status(500).json({ error: "update_failed" });
       return;
     }
-    res
-      .status(result.verified ? 200 : 422)
-      .json({ slug: req.params.slug, verified: result.verified, reason: result.reason });
+    res.status(200).json({ slug: req.params.slug, verified: true });
   });
 
   // Public directory: only live, verified endpoints. No tokens leaked.
@@ -194,6 +270,47 @@ export function createRegistrationRouter(): Router {
       return;
     }
     res.json({ endpoints: data ?? [] });
+  });
+
+  // Deactivate or update an endpoint. Requires a fresh wallet signature over the
+  // exact slug + active value; publisher_wallet is an identifier, not auth.
+  router.patch("/endpoints/:slug", async (req, res) => {
+    const ip = req.ip ?? "unknown";
+    if (!rateLimiter.hit(`register:${ip}`, REGISTER_RPM).allowed) {
+      res.status(429).json({ error: "rate_limited" });
+      return;
+    }
+    const { data: ep, error: fetchErr } = await supabase
+      .from("endpoints")
+      .select("slug, publisher_wallet")
+      .eq("slug", req.params.slug)
+      .maybeSingle();
+    if (fetchErr) {
+      res.status(500).json({ error: "db_error" });
+      return;
+    }
+    if (!ep) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const auth = await verifyPatchOwnership(
+      req.params.slug,
+      ep.publisher_wallet,
+      (req.body ?? {}) as PatchOwnershipInput
+    );
+    if (!auth.ok) {
+      res.status(auth.status).json({ error: auth.error });
+      return;
+    }
+    const { error: upErr } = await supabase
+      .from("endpoints")
+      .update({ active: auth.active })
+      .eq("slug", req.params.slug);
+    if (upErr) {
+      res.status(500).json({ error: "update_failed" });
+      return;
+    }
+    res.json({ slug: req.params.slug, active: auth.active });
   });
 
   // Status for a single slug (publisher polls verification). No token leak.

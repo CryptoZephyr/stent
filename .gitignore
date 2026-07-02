@@ -22,6 +22,19 @@ out/
 *.log
 npm-debug.log*
 
+# Test/build/local outputs
+.vercel/
+coverage/
+.turbo/
+.cache/
+logs/
+test-results/
+playwright-report/
+screenshots/
+recordings/
+*.mp4
+*.webm
+
 # Editor / OS
 .DS_Store
 .vscode/
@@ -32,9 +45,13 @@ Thumbs.db
 supabase/.branches
 supabase/.temp
 
-# Internal docs — only readme.md is published
-*.md
-!readme.md
+# Internal docs — local-only
+CLAUDE.md
+DEMO.md
+DEPLOYMENT.md
+goal.md
+PRODUCT.md
+project_description.md
 
 # Local Claude Code settings / plans
 .claude/
