@@ -413,10 +413,15 @@ export function VerifyStep({
           />
           <p style={{ marginTop: 10 }}>
             Can&apos;t add a file at your domain&apos;s root — shared hosting, a managed API
-            gateway, or a subpath-only deployment? Verification isn&apos;t supported for that
-            setup yet. Host this API on a domain or subdomain you control directly, then
-            register it with that URL instead.
+            gateway, or a subpath-only deployment? Instead, return this header on your API
+            endpoint&apos;s own response:
           </p>
+          <div style={{ height: 8 }} />
+          <InlineCopy value={`X-Stent-Verify: ${reg.verification_token}`} />
+          <div className="hint" style={{ marginTop: 8 }}>
+            We check the file first, then this header on {targetUrl || "your API endpoint"} —
+            either one verifies.
+          </div>
         </div>
       </details>
 

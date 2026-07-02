@@ -164,6 +164,7 @@ export interface PublicFetchResult {
   status: number;
   contentType: string;
   body: Buffer;
+  headers: Record<string, string>;
 }
 
 export class PublicFetchError extends Error {
@@ -276,6 +277,7 @@ async function fetchPublicUrlInner(
     status: result.status,
     contentType: result.headers["content-type"] ?? "application/octet-stream",
     body: result.body,
+    headers: result.headers,
   };
 }
 
@@ -426,15 +428,38 @@ function lowerHeaders(headers: IncomingMessage["headers"]): Record<string, strin
 
 // ── Verification ──────────────────────────────────────────────────────────────
 
+export interface VerifyOwnershipOpts {
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+  lookupImpl?: LookupFn;
+  allowInsecureLoopback?: boolean;
+}
+
+/**
+ * Verify ownership via the domain-root `stent-verification.txt` file, or —
+ * when that fails — via an `X-Stent-Verify: <token>` header on the target
+ * URL's own response. The header path exists for publishers who can't add a
+ * route at their domain root (shared hosting, managed API gateways, subpath
+ * deployments): they can return the token as a header on the exact endpoint
+ * Stent is paywalling instead. Both paths reuse the same SSRF-guarded fetch;
+ * the header attempt is skipped only when the file already verified.
+ */
 export async function verifyOwnership(
   targetUrl: string,
   expectedToken: string,
-  opts: {
-    timeoutMs?: number;
-    fetchImpl?: typeof fetch;
-    lookupImpl?: LookupFn;
-    allowInsecureLoopback?: boolean;
-  } = {}
+  opts: VerifyOwnershipOpts = {}
+): Promise<VerifyResult> {
+  const fileResult = await verifyViaFile(targetUrl, expectedToken, opts);
+  if (fileResult.verified) return fileResult;
+
+  const headerResult = await verifyViaHeader(targetUrl, expectedToken, opts);
+  return headerResult.verified ? headerResult : fileResult;
+}
+
+async function verifyViaFile(
+  targetUrl: string,
+  expectedToken: string,
+  opts: VerifyOwnershipOpts
 ): Promise<VerifyResult> {
   const expected = expectedToken.trim();
   const log = {
@@ -553,6 +578,71 @@ export async function verifyOwnership(
       });
     }
     return finish({ verified: false, reason: verificationReason(normalized.reason), verificationUrl });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const VERIFY_HEADER = "x-stent-verify";
+
+/**
+ * Verify ownership via an `X-Stent-Verify: <token>` header on the target
+ * URL's own response. Uses the same SSRF-guarded fetch as the file check.
+ */
+async function verifyViaHeader(
+  targetUrl: string,
+  expectedToken: string,
+  opts: VerifyOwnershipOpts
+): Promise<VerifyResult> {
+  const expected = expectedToken.trim();
+
+  let url: URL;
+  try {
+    url = new URL(targetUrl);
+  } catch {
+    return { verified: false, reason: "invalid_target_url" };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 5000);
+  try {
+    let status: number;
+    let headerValue: string | undefined;
+    if (opts.fetchImpl) {
+      const guard = await resolvePublicHost(url.hostname, opts.lookupImpl);
+      if (!guard.ok) return { verified: false, reason: verificationReason(guard.reason) };
+      const res = await opts.fetchImpl(targetUrl, { signal: controller.signal });
+      status = res.status;
+      // A test double or minimal fetch shim may not implement Headers — treat
+      // a missing accessor the same as the header being absent.
+      headerValue = (res as { headers?: { get?(name: string): string | null } }).headers?.get?.(
+        VERIFY_HEADER
+      ) ?? undefined;
+    } else {
+      const res = await fetchPublicUrl(targetUrl, {
+        timeoutMs: opts.timeoutMs ?? 5000,
+        lookupImpl: opts.lookupImpl,
+        allowInsecureLoopback: opts.allowInsecureLoopback,
+      });
+      status = res.status;
+      headerValue = res.headers[VERIFY_HEADER];
+    }
+    if (status < 200 || status >= 300) {
+      return { verified: false, reason: httpFailureReason(status), verificationUrl: targetUrl, httpStatus: status };
+    }
+    const found = headerValue?.trim();
+    if (!found) {
+      return { verified: false, reason: "header_not_present", verificationUrl: targetUrl, httpStatus: status };
+    }
+    return found === expected
+      ? { verified: true, reason: "header_verified", found, verificationUrl: targetUrl, httpStatus: status }
+      : { verified: false, reason: "header_mismatch", found, verificationUrl: targetUrl, httpStatus: status };
+  } catch (err) {
+    if (err instanceof PublicFetchError) {
+      return { verified: false, reason: verificationReason(err.reason) };
+    }
+    const normalized = normalizeRequestError(err, url.protocol);
+    return { verified: false, reason: verificationReason(normalized.reason) };
   } finally {
     clearTimeout(timer);
   }

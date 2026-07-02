@@ -204,6 +204,40 @@ describe("verifyOwnership production request path", () => {
     expect(r).toMatchObject({ verified: false, reason: "connection_timeout" });
   });
 
+  it("verifies via X-Stent-Verify header when the root file is missing", async () => {
+    const { origin, lookup } = await listen((req, res) => {
+      if (req.url === "/stent-verification.txt") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "X-Stent-Verify": "tok-header" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const r = await verifyOwnership(`${origin}/data`, "tok-header", {
+      lookupImpl: lookup,
+      allowInsecureLoopback: true,
+    });
+    expect(r).toMatchObject({ verified: true, reason: "header_verified", found: "tok-header" });
+  });
+
+  it("reports the file's failure reason when neither the file nor the header match", async () => {
+    const { origin, lookup } = await listen((req, res) => {
+      if (req.url === "/stent-verification.txt") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      res.writeHead(200);
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const r = await verifyOwnership(`${origin}/data`, "tok-header", {
+      lookupImpl: lookup,
+      allowInsecureLoopback: true,
+    });
+    expect(r).toMatchObject({ verified: false, reason: "http_404" });
+  });
+
 });
 
 describe("createPinnedLookup", () => {
