@@ -139,7 +139,7 @@ export default function ConsolePage() {
           <div className="brand-row">
             <div className="brand">
               <span className="brand-mark">STENT</span>
-              <span className="badge-402">CONSOLE</span>
+              <span className="badge-402">RUNS</span>
             </div>
             <div className="network">
               <span className="dot" />

@@ -102,7 +102,7 @@ export default function LivePage() {
           <div className="brand-row">
             <div className="brand">
               <span className="brand-mark">STENT</span>
-              <span className="badge-402">LIVE</span>
+              <span className="badge-402">PAYMENTS</span>
             </div>
             <div className="network">
               <span className="dot" />
