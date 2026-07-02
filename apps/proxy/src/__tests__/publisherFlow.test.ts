@@ -15,6 +15,7 @@ type EndpointRow = {
   verified: boolean;
   active: boolean;
   created_at: string;
+  sample_response: string | null;
 };
 
 const db = vi.hoisted(() => {
@@ -91,10 +92,16 @@ describe("publisher ownership verification flow", () => {
 
   it("registers, verifies the generated token, and publishes the endpoint in the marketplace", async () => {
     let servedToken = "";
+    const sampleData = JSON.stringify({ block: 12345, gasPrice: "20.24" });
     origin = createServer((req, res) => {
       if (req.url === "/stent-verification.txt" && servedToken) {
         res.writeHead(200, { "content-type": "text/plain" });
         res.end(servedToken);
+        return;
+      }
+      if (req.url === "/arc-stats") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(sampleData);
         return;
       }
       res.writeHead(404, { "content-type": "text/plain" });
@@ -126,6 +133,13 @@ describe("publisher ownership verification flow", () => {
     const verifyRes = await fetch(`${apiUrl}/_api/endpoints/flow-test/verify`, { method: "POST" });
     expect(verifyRes.status).toBe(200);
     await expect(verifyRes.json()).resolves.toMatchObject({ slug: "flow-test", verified: true });
+
+    const statusRes = await fetch(`${apiUrl}/_api/endpoints/flow-test`);
+    expect(statusRes.status).toBe(200);
+    await expect(statusRes.json()).resolves.toMatchObject({
+      slug: "flow-test",
+      sample_response: sampleData,
+    });
 
     const marketplaceRes = await fetch(`${apiUrl}/_api/endpoints`);
     expect(marketplaceRes.status).toBe(200);

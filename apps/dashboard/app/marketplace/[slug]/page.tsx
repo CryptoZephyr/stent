@@ -110,6 +110,19 @@ export default function EndpointDetailPage({ params }: { params: { slug: string 
             <p className="step-eyebrow">Public URL</p>
             <InlineCopy value={endpointUrl(ep.slug)} />
 
+            {ep.sample_response && (
+              <>
+                <p className="step-eyebrow" style={{ marginTop: 22 }}>
+                  Sample response
+                </p>
+                <p className="hint" style={{ marginBottom: 10 }}>
+                  Captured automatically from this endpoint when it verified — what a paid
+                  request actually returns.
+                </p>
+                <CodeBlock code={ep.sample_response} filename="response" />
+              </>
+            )}
+
             <p className="step-eyebrow" style={{ marginTop: 22 }}>
               Integrate with the Stent SDK
             </p>

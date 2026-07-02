@@ -250,7 +250,7 @@ export function createRegistrationRouter(): Router {
     }
     const { error: upErr } = await supabase
       .from("endpoints")
-      .update({ verified: true })
+      .update({ verified: true, sample_response: result.sampleBody ?? null })
       .eq("slug", req.params.slug);
     if (upErr) {
       res.status(500).json({ error: "update_failed" });
@@ -319,7 +319,7 @@ export function createRegistrationRouter(): Router {
   router.get("/endpoints/:slug", async (req, res) => {
     const { data, error } = await supabase
       .from("endpoints")
-      .select("slug, price_usdc, description, publisher_wallet, verified, active, created_at")
+      .select("slug, price_usdc, description, publisher_wallet, verified, active, created_at, sample_response")
       .eq("slug", req.params.slug)
       .maybeSingle();
     if (error) {

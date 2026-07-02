@@ -27,6 +27,14 @@ export interface VerifyResult {
   verificationUrl?: string;
   /** HTTP status returned by the verification URL, when a response was received. */
   httpStatus?: number;
+  /** Truncated (~2KB) response body from target_url, captured best-effort on success. */
+  sampleBody?: string;
+}
+
+const SAMPLE_MAX_CHARS = 2048;
+
+function truncateSample(text: string): string {
+  return text.length > SAMPLE_MAX_CHARS ? text.slice(0, SAMPLE_MAX_CHARS) : text;
 }
 
 const VERIFICATION_PATH = "/stent-verification.txt";
@@ -450,7 +458,12 @@ export async function verifyOwnership(
   opts: VerifyOwnershipOpts = {}
 ): Promise<VerifyResult> {
   const fileResult = await verifyViaFile(targetUrl, expectedToken, opts);
-  if (fileResult.verified) return fileResult;
+  if (fileResult.verified) {
+    // The file check only ever fetches the verification file, not target_url
+    // itself — capture a sample of the real endpoint separately, best-effort.
+    const sampleBody = await captureSample(targetUrl, opts);
+    return sampleBody !== undefined ? { ...fileResult, sampleBody } : fileResult;
+  }
 
   const headerResult = await verifyViaHeader(targetUrl, expectedToken, opts);
   return headerResult.verified ? headerResult : fileResult;
@@ -608,6 +621,7 @@ async function verifyViaHeader(
   try {
     let status: number;
     let headerValue: string | undefined;
+    let bodyText: string | undefined;
     if (opts.fetchImpl) {
       const guard = await resolvePublicHost(url.hostname, opts.lookupImpl);
       if (!guard.ok) return { verified: false, reason: verificationReason(guard.reason) };
@@ -618,6 +632,7 @@ async function verifyViaHeader(
       headerValue = (res as { headers?: { get?(name: string): string | null } }).headers?.get?.(
         VERIFY_HEADER
       ) ?? undefined;
+      bodyText = await res.text?.().catch(() => undefined);
     } else {
       const res = await fetchPublicUrl(targetUrl, {
         timeoutMs: opts.timeoutMs ?? 5000,
@@ -626,6 +641,7 @@ async function verifyViaHeader(
       });
       status = res.status;
       headerValue = res.headers[VERIFY_HEADER];
+      bodyText = res.body.toString("utf8");
     }
     if (status < 200 || status >= 300) {
       return { verified: false, reason: httpFailureReason(status), verificationUrl: targetUrl, httpStatus: status };
@@ -635,7 +651,14 @@ async function verifyViaHeader(
       return { verified: false, reason: "header_not_present", verificationUrl: targetUrl, httpStatus: status };
     }
     return found === expected
-      ? { verified: true, reason: "header_verified", found, verificationUrl: targetUrl, httpStatus: status }
+      ? {
+          verified: true,
+          reason: "header_verified",
+          found,
+          verificationUrl: targetUrl,
+          httpStatus: status,
+          sampleBody: bodyText !== undefined ? truncateSample(bodyText) : undefined,
+        }
       : { verified: false, reason: "header_mismatch", found, verificationUrl: targetUrl, httpStatus: status };
   } catch (err) {
     if (err instanceof PublicFetchError) {
@@ -645,6 +668,43 @@ async function verifyViaHeader(
     return { verified: false, reason: verificationReason(normalized.reason) };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * Best-effort fetch of `target_url` to capture a sample of the real response,
+ * for endpoints that verified via the file check (which never fetches
+ * target_url itself). Never throws — a failed capture just means no sample.
+ */
+async function captureSample(targetUrl: string, opts: VerifyOwnershipOpts): Promise<string | undefined> {
+  try {
+    let url: URL;
+    try {
+      url = new URL(targetUrl);
+    } catch {
+      return undefined;
+    }
+    let status: number;
+    let bodyText: string;
+    if (opts.fetchImpl) {
+      const guard = await resolvePublicHost(url.hostname, opts.lookupImpl);
+      if (!guard.ok) return undefined;
+      const res = await opts.fetchImpl(targetUrl);
+      status = res.status;
+      bodyText = await res.text();
+    } else {
+      const res = await fetchPublicUrl(targetUrl, {
+        timeoutMs: opts.timeoutMs ?? 5000,
+        lookupImpl: opts.lookupImpl,
+        allowInsecureLoopback: opts.allowInsecureLoopback,
+      });
+      status = res.status;
+      bodyText = res.body.toString("utf8");
+    }
+    if (status < 200 || status >= 300) return undefined;
+    return truncateSample(bodyText);
+  } catch {
+    return undefined;
   }
 }
 

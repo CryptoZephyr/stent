@@ -44,6 +44,7 @@ export interface EndpointStatus {
   verified: boolean;
   active: boolean;
   created_at: string;
+  sample_response: string | null;
 }
 
 export type ApiResult<T> =
