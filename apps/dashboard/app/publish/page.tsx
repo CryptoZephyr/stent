@@ -65,7 +65,7 @@ export default function Page() {
           <div className="brand-row">
             <div className="brand">
               <span className="brand-mark">STENT</span>
-              <span className="badge-402">HTTP 402</span>
+              <span className="badge-402">PUBLISH</span>
             </div>
             <div className="network">
               <span className="dot" />
@@ -189,7 +189,7 @@ export default function Page() {
 
       <footer className="foot">
         <div className="line">
-          <span>Stent · x402 micropayments on {NETWORK_LABEL}</span>
+          <span>Stent · USDC micropayments on {NETWORK_LABEL}</span>
           <span>{PROXY_URL.replace(/^https?:\/\//, "")}</span>
         </div>
       </footer>
