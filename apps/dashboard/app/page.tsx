@@ -483,7 +483,7 @@ export default function Landing() {
             </p>
             <div className="land-install">
               <span className="mono land-install-p">$</span>
-              <span className="mono land-install-cmd">npm install @stent/sdk</span>
+              <span className="mono land-install-cmd">git clone github.com/CryptoZephyr/stent</span>
             </div>
           </div>
           <div className="code land-sdk-code">

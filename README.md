@@ -129,7 +129,8 @@ the origin URL or verification secret.
 
 ## SDK
 
-The SDK lives in `packages/sdk` as workspace package `@stent/sdk`.
+The SDK lives in `packages/sdk` as workspace package `@stent/sdk`. It is not
+published to npm; use it today by copying `packages/sdk` into your project.
 
 ```ts
 import { StentClient } from "@stent/sdk";

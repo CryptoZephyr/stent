@@ -5,7 +5,8 @@ export function endpointUrl(slug: string): string {
 }
 
 export function sdkSnippet(slug: string): string {
-  return `import { StentClient } from "@stent/sdk";
+  return `// @stent/sdk isn't on npm yet — copy packages/sdk from github.com/CryptoZephyr/stent
+import { StentClient } from "@stent/sdk";
 
 const client = new StentClient({
   privateKey: process.env.AGENT_PRIVATE_KEY,  // a funded Gateway wallet
