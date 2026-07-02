@@ -1,10 +1,12 @@
 import Link from "next/link";
 import type { EndpointSummary } from "@/lib/api";
+import type { EndpointStats } from "@/lib/economy";
 import { shortAddr } from "@/lib/wallet";
 import { endpointUrl } from "@/lib/snippet";
 import { Copy } from "@/components/ui";
+import { formatCount, timeAgo } from "@/components/economy/format";
 
-export function EndpointCard({ ep }: { ep: EndpointSummary }) {
+export function EndpointCard({ ep, stats }: { ep: EndpointSummary; stats?: EndpointStats }) {
   return (
     <div className="mkt-card">
       <div className="mkt-card-head">
@@ -31,6 +33,15 @@ export function EndpointCard({ ep }: { ep: EndpointSummary }) {
             {shortAddr(ep.publisher_wallet)}
           </div>
         </div>
+        {stats && stats.calls > 0 && (
+          <div className="mkt-stat">
+            <div className="mkt-stat-k">calls</div>
+            <div className="mkt-stat-v mono">
+              {formatCount(stats.calls)}
+              {stats.lastActiveAt ? ` · ${timeAgo(stats.lastActiveAt)}` : ""}
+            </div>
+          </div>
+        )}
       </div>
       <div className="inline-copy mkt-url">
         <code>{endpointUrl(ep.slug)}</code>

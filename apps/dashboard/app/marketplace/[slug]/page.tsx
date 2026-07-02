@@ -4,14 +4,17 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { NETWORK_LABEL } from "@/lib/config";
 import { getStatus, type EndpointStatus } from "@/lib/api";
+import { fetchPayments, endpointStatsBySlug, type EndpointStats } from "@/lib/economy";
 import { endpointUrl, sdkSnippet, curlSnippet } from "@/lib/snippet";
 import { shortAddr } from "@/lib/wallet";
+import { formatCount, timeAgo } from "@/components/economy/format";
 import { CodeBlock, InlineCopy, StatusBadge } from "@/components/ui";
 import { EndpointDetailSkeleton } from "@/components/skeletons";
 
 export default function EndpointDetailPage({ params }: { params: { slug: string } }) {
   const { slug } = params;
   const [ep, setEp] = useState<EndpointStatus | null>(null);
+  const [stats, setStats] = useState<EndpointStats | undefined>(undefined);
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
@@ -23,6 +26,16 @@ export default function EndpointDetailPage({ params }: { params: { slug: string 
       if (r.ok) setEp(r.data);
       else setErr(r.error);
       setLoaded(true);
+    })();
+    // Usage stats are a nice-to-have: fetched separately so a Supabase hiccup
+    // never blocks the endpoint detail itself from rendering.
+    (async () => {
+      try {
+        const rows = await fetchPayments();
+        if (active) setStats(endpointStatsBySlug(rows).get(slug));
+      } catch {
+        // leave stats unset — the detail page just omits the "calls" row
+      }
     })();
     return () => {
       active = false;
@@ -83,6 +96,15 @@ export default function EndpointDetailPage({ params }: { params: { slug: string 
                 <span className="kv-k">Network</span>
                 <span className="kv-v">{NETWORK_LABEL}</span>
               </div>
+              {stats && stats.calls > 0 && (
+                <div className="kv-row">
+                  <span className="kv-k">Calls</span>
+                  <span className="kv-v">
+                    {formatCount(stats.calls)}
+                    {stats.lastActiveAt ? ` · last active ${timeAgo(stats.lastActiveAt)}` : ""}
+                  </span>
+                </div>
+              )}
             </div>
 
             <p className="step-eyebrow">Public URL</p>

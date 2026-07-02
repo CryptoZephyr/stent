@@ -4,12 +4,14 @@ import { useEffect, useState } from "react";
 import { NETWORK_LABEL } from "@/lib/config";
 import Link from "next/link";
 import { listEndpoints, type EndpointSummary } from "@/lib/api";
+import { fetchPayments, endpointStatsBySlug, type EndpointStats } from "@/lib/economy";
 import { EndpointCard } from "@/components/marketplace/EndpointCard";
 import { MarketplaceSkeleton } from "@/components/skeletons";
 import { Empty } from "@/components/ui";
 
 export default function MarketplacePage() {
   const [endpoints, setEndpoints] = useState<EndpointSummary[] | null>(null);
+  const [stats, setStats] = useState<Map<string, EndpointStats>>(new Map());
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -19,6 +21,16 @@ export default function MarketplacePage() {
       if (!active) return;
       if (r.ok) setEndpoints(r.data);
       else setErr(r.error);
+    })();
+    // Usage stats are a nice-to-have: fetched separately so a Supabase hiccup
+    // never blocks the marketplace listing itself from rendering.
+    (async () => {
+      try {
+        const rows = await fetchPayments();
+        if (active) setStats(endpointStatsBySlug(rows));
+      } catch {
+        // leave stats empty — cards just omit the "calls" stat
+      }
     })();
     return () => {
       active = false;
@@ -66,7 +78,7 @@ export default function MarketplacePage() {
         {endpoints && endpoints.length > 0 && (
           <div className="mkt-grid">
             {endpoints.map((ep) => (
-              <EndpointCard key={ep.slug} ep={ep} />
+              <EndpointCard key={ep.slug} ep={ep} stats={stats.get(ep.slug)} />
             ))}
           </div>
         )}

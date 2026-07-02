@@ -165,6 +165,26 @@ export function computeLeaderboards(rows: PaymentRow[], agentNames: Map<string, 
   };
 }
 
+export interface EndpointStats {
+  calls: number;
+  lastActiveAt: string | null;
+}
+
+/**
+ * Per-endpoint call count + most recent activity, computed from an already
+ * -fetched, newest-first payments array (no extra query — same rows `/live`
+ * and the landing page already pull).
+ */
+export function endpointStatsBySlug(rows: PaymentRow[]): Map<string, EndpointStats> {
+  const m = new Map<string, EndpointStats>();
+  for (const r of rows) {
+    const s = m.get(r.endpoint_slug);
+    if (s) s.calls += 1;
+    else m.set(r.endpoint_slug, { calls: 1, lastActiveAt: r.created_at });
+  }
+  return m;
+}
+
 export function toActivity(
   rows: PaymentRow[],
   agentNames: Map<string, string>,
