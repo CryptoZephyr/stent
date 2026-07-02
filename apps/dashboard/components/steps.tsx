@@ -18,7 +18,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /* ── 01 · Connect ───────────────────────────────────────────────────────── */
 
 export function ConnectStep({ onConnect }: { onConnect: (addr: string) => void }) {
-  const [pasting, setPasting] = useState(false);
+  const [pasting, setPasting] = useState(true);
   const [addr, setAddr] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -58,7 +58,7 @@ export function ConnectStep({ onConnect }: { onConnect: (addr: string) => void }
 
   return (
     <div className="card">
-      <p className="step-eyebrow">Step 01 — Connect</p>
+      <p className="step-eyebrow">Step 01 — Payout address</p>
       <h2>Where should earnings land?</h2>
       <p className="lede">
         Every paid request settles in USDC to one wallet. You&apos;re not signing anything —

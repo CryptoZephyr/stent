@@ -11,7 +11,7 @@ import { listPending, savePending, removePending, type PendingReg } from "@/lib/
 type Step = "connect" | "register" | "verify" | "live";
 
 const STATIONS: { id: Step; name: string }[] = [
-  { id: "connect", name: "Connect" },
+  { id: "connect", name: "Payout" },
   { id: "register", name: "Register" },
   { id: "verify", name: "Verify" },
   { id: "live", name: "Live" },

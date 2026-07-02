@@ -280,8 +280,8 @@ export default function Landing() {
             settle in USDC per call, and execute real work — no keys to pass around, no invoices.
           </p>
           <div className="land-hero-cta">
-            <Link href="/agents" className="btn btn-primary btn-lg">
-              Connect an agent wallet →
+            <Link href="#sdk" className="btn btn-primary btn-lg">
+              See the SDK →
             </Link>
             <Link href="/marketplace" className="btn btn-ghost btn-lg">
               Explore the marketplace
