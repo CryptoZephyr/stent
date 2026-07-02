@@ -52,6 +52,8 @@ DEPLOYMENT.md
 goal.md
 PRODUCT.md
 project_description.md
+architecture.md
+system_design.md
 
 # Local Claude Code settings / plans
 .claude/
