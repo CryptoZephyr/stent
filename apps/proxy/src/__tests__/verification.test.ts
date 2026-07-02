@@ -1,5 +1,12 @@
-import { describe, it, expect, vi } from "vitest";
-import { verifyOwnership, isBlockedIp, assertPublicHost, type LookupFn } from "../verification";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  verifyOwnership,
+  isBlockedIp,
+  assertPublicHost,
+  createPinnedLookup,
+  type LookupFn,
+} from "../verification";
 
 function fakeFetch(status: number, body: string): typeof fetch {
   return vi.fn(async () => ({
@@ -14,14 +21,23 @@ function fakeFetch(status: number, body: string): typeof fetch {
 const publicLookup: LookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
 const lookupTo = (...addrs: string[]): LookupFn => async () =>
   addrs.map((address) => ({ address, family: address.includes(":") ? 6 : 4 }));
+type TestHandler = (req: IncomingMessage, res: ServerResponse) => void;
 
 describe("verifyOwnership (token comparison — public hosts)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("verifies when the served token matches (whitespace-insensitive)", async () => {
     const r = await verifyOwnership("https://api.example.com/data", "tok-123", {
       fetchImpl: fakeFetch(200, "  tok-123\n"),
       lookupImpl: publicLookup,
     });
-    expect(r).toMatchObject({ verified: true, found: "tok-123" });
+    expect(r).toMatchObject({ verified: true, reason: "verification_successful", found: "tok-123" });
   });
 
   it("rejects on token mismatch", async () => {
@@ -32,15 +48,23 @@ describe("verifyOwnership (token comparison — public hosts)", () => {
     expect(r).toMatchObject({ verified: false, reason: "token_mismatch" });
   });
 
-  it("rejects when the file is missing (non-2xx)", async () => {
+  it("rejects when the file is missing", async () => {
     const r = await verifyOwnership("https://api.example.com", "tok-123", {
       fetchImpl: fakeFetch(404, "Not Found"),
       lookupImpl: publicLookup,
     });
-    expect(r).toMatchObject({ verified: false, reason: "fetch_status_404" });
+    expect(r).toMatchObject({ verified: false, reason: "http_404", httpStatus: 404 });
   });
 
-  it("rejects when the origin is unreachable", async () => {
+  it("reports 5xx responses precisely", async () => {
+    const r = await verifyOwnership("https://api.example.com", "tok-123", {
+      fetchImpl: fakeFetch(500, "Internal Server Error"),
+      lookupImpl: publicLookup,
+    });
+    expect(r).toMatchObject({ verified: false, reason: "http_5xx", httpStatus: 500 });
+  });
+
+  it("reports fetch connection failures without saying DNS/unreachable", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
@@ -48,7 +72,41 @@ describe("verifyOwnership (token comparison — public hosts)", () => {
       fetchImpl,
       lookupImpl: publicLookup,
     });
-    expect(r).toMatchObject({ verified: false, reason: "unreachable" });
+    expect(r).toMatchObject({ verified: false, reason: "connection_failed" });
+  });
+
+  it("reports TLS handshake failures precisely", async () => {
+    const fetchImpl = vi.fn(async () => {
+      const err = new Error("certificate has expired") as NodeJS.ErrnoException;
+      err.code = "CERT_HAS_EXPIRED";
+      throw err;
+    }) as unknown as typeof fetch;
+    const r = await verifyOwnership("https://tls.example.com", "tok-123", {
+      fetchImpl,
+      lookupImpl: publicLookup,
+    });
+    expect(r).toMatchObject({ verified: false, reason: "tls_failure" });
+  });
+
+  it("reports DNS lookup failures precisely", async () => {
+    const lookup: LookupFn = async () => {
+      throw new Error("ENOTFOUND");
+    };
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const r = await verifyOwnership("https://missing.example.com", "tok-123", {
+      fetchImpl,
+      lookupImpl: lookup,
+    });
+    expect(r).toMatchObject({ verified: false, reason: "dns_lookup_failed" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty verification file", async () => {
+    const r = await verifyOwnership("https://api.example.com/data", "tok-123", {
+      fetchImpl: fakeFetch(200, " \n\t"),
+      lookupImpl: publicLookup,
+    });
+    expect(r).toMatchObject({ verified: false, reason: "empty_verification_file" });
   });
 
   it("rejects an empty expected token outright (no fetch)", async () => {
@@ -56,6 +114,112 @@ describe("verifyOwnership (token comparison — public hosts)", () => {
     const r = await verifyOwnership("https://api.example.com", "   ", { fetchImpl });
     expect(r).toMatchObject({ verified: false, reason: "no_expected_token" });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("verifyOwnership production request path", () => {
+  let server: Server | undefined;
+
+  beforeEach(() => {
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    if (server) {
+      await new Promise<void>((resolve, reject) => {
+        server?.close((err) => (err ? reject(err) : resolve()));
+      });
+      server = undefined;
+    }
+  });
+
+  async function listen(handler: TestHandler): Promise<{ origin: string; lookup: LookupFn }> {
+    server = createServer(handler);
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port");
+    return {
+      origin: `http://127.0.0.1:${address.port}`,
+      lookup: async () => [{ address: "127.0.0.1", family: 4 }],
+    };
+  }
+
+  it("verifies by reading /stent-verification.txt from a reachable server", async () => {
+    const { origin, lookup } = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("  tok-123\n");
+    });
+    const r = await verifyOwnership(origin, "tok-123", {
+      lookupImpl: lookup,
+      allowInsecureLoopback: true,
+    });
+    expect(r).toMatchObject({
+      verified: true,
+      reason: "verification_successful",
+      verificationUrl: `${origin}/stent-verification.txt`,
+      httpStatus: 200,
+      found: "tok-123",
+    });
+  });
+
+  it("follows redirect responses to the verification token", async () => {
+    const { origin, lookup } = await listen((req, res) => {
+      if (req.url === "/stent-verification.txt") {
+        res.writeHead(302, { location: "/verification-target.txt" });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("tok-redirect");
+    });
+    const r = await verifyOwnership(origin, "tok-redirect", {
+      lookupImpl: lookup,
+      allowInsecureLoopback: true,
+    });
+    expect(r).toMatchObject({ verified: true, reason: "verification_successful", httpStatus: 200 });
+  });
+
+  it("reports redirect loops precisely", async () => {
+    const { origin, lookup } = await listen((_req, res) => {
+      res.writeHead(302, { location: "/stent-verification.txt" });
+      res.end();
+    });
+    const r = await verifyOwnership(origin, "tok-123", {
+      lookupImpl: lookup,
+      allowInsecureLoopback: true,
+    });
+    expect(r).toMatchObject({ verified: false, reason: "redirect_loop" });
+  });
+
+  it("reports connection timeouts precisely", async () => {
+    const { origin, lookup } = await listen((_req, _res) => {
+      // Hold the socket open beyond the verifier timeout.
+    });
+    const r = await verifyOwnership(origin, "tok-123", {
+      lookupImpl: lookup,
+      allowInsecureLoopback: true,
+      timeoutMs: 30,
+    });
+    expect(r).toMatchObject({ verified: false, reason: "connection_timeout" });
+  });
+
+});
+
+describe("createPinnedLookup", () => {
+  it("returns array results for Railway-style hosts when Node asks lookup({ all: true })", async () => {
+    const lookup = createPinnedLookup({ address: "69.46.46.104", family: 4 });
+    const addresses = await new Promise<{ address: string; family: number }[]>((resolve, reject) => {
+      lookup(
+        "stent-production.up.railway.app",
+        { all: true },
+        (err: NodeJS.ErrnoException | null, result: { address: string; family: number }[]) => {
+          if (err) reject(err);
+          else resolve(result);
+        }
+      );
+    });
+    expect(addresses).toEqual([{ address: "69.46.46.104", family: 4 }]);
   });
 });
 
@@ -138,6 +302,14 @@ describe("assertPublicHost", () => {
 });
 
 describe("verifyOwnership SSRF guard", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("blocks a private target BEFORE any fetch", async () => {
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     const r = await verifyOwnership("https://internal.example.com/x", "tok", {

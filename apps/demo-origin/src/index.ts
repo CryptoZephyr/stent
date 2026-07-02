@@ -102,11 +102,16 @@ app.get("/crypto-news", (_req, res) => {
 });
 
 // URL-ownership proof. A real publisher would place this file at their domain
-// root containing their Stent account token. Served from env so tests can vary it.
-const VERIFICATION_TOKEN = process.env.STENT_VERIFICATION_TOKEN ?? "stent-demo-token";
-app.get("/stent-verification.txt", (_req, res) =>
-  res.type("text/plain").send(VERIFICATION_TOKEN)
-);
+// root containing their Stent account token. Configure the generated token in
+// Railway as STENT_VERIFICATION_TOKEN before verifying this demo origin.
+app.get("/stent-verification.txt", (_req, res) => {
+  const token = process.env.STENT_VERIFICATION_TOKEN?.trim();
+  if (!token) {
+    res.status(500).type("text/plain").send("STENT_VERIFICATION_TOKEN is not configured");
+    return;
+  }
+  res.type("text/plain").send(token);
+});
 
 app.get("/", (_req, res) =>
   res.json({ service: "stent-demo-origin", endpoints: ["/arc-stats", "/usdc-volume", "/crypto-news"] })

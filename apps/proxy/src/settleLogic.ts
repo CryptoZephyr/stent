@@ -104,7 +104,7 @@ async function evaluateBeforeSettleUnsafe(
     if (err instanceof PublicFetchError) {
       return {
         ok: false,
-        reason: err.reason === "unreachable" ? "upstream_unavailable" : err.reason,
+        reason: isUpstreamUnavailableReason(err.reason) ? "upstream_unavailable" : err.reason,
       };
     }
     return { ok: false, reason: "upstream_unavailable" };
@@ -133,4 +133,13 @@ async function evaluateBeforeSettleUnsafe(
     return { ok: false, reason: ins.duplicate ? "replay" : "payment_log_failed", upstream };
   }
   return { ok: true, upstream, row };
+}
+
+function isUpstreamUnavailableReason(reason: string): boolean {
+  return (
+    reason === "unreachable" ||
+    reason === "connection_failed" ||
+    reason === "connection_timeout" ||
+    reason === "tls_failure"
+  );
 }

@@ -39,10 +39,58 @@ export function verifyMessage(r: VerifyResultLike, ctx: { fileUrl: string }): Ve
           "We reached your file but the contents didn't match. It must return only the token — no quotes, no HTML, no extra spaces or lines.",
         detail: reason,
       };
-    case "unreachable":
+    case "dns_lookup_failed":
       return {
-        title: "Couldn't reach your server",
-        guidance: `We couldn't connect to ${fileUrl}. Check the URL is public and your server is running, then check again.`,
+        title: "DNS lookup failed",
+        guidance: `We couldn't resolve the hostname for ${fileUrl}. Check that the domain is public and its DNS records are live, then check again.`,
+        detail: reason,
+      };
+    case "connection_timeout":
+      return {
+        title: "Connection timed out",
+        guidance: `We resolved your server but it did not respond before the timeout. Check that ${fileUrl} is reachable from the public internet, then check again.`,
+        detail: reason,
+      };
+    case "tls_failure":
+      return {
+        title: "TLS failed",
+        guidance: `We reached your server but couldn't complete the HTTPS handshake. Check the certificate for ${fileUrl}, then check again.`,
+        detail: reason,
+      };
+    case "redirect_loop":
+      return {
+        title: "Redirect loop",
+        guidance: `The verification file redirected too many times. Make ${fileUrl} return the token directly, or redirect once to a public HTTPS URL that does.`,
+        detail: reason,
+      };
+    case "connection_failed":
+      return {
+        title: "Connection failed",
+        guidance: `We resolved your server but couldn't connect to ${fileUrl}. Check that the server is running and reachable from the public internet, then check again.`,
+        detail: reason,
+      };
+    case "http_404":
+      return {
+        title: "No file found there",
+        guidance: `We fetched ${fileUrl} but got HTTP 404. Make sure the file exists at your domain root and returns 200.`,
+        detail: reason,
+      };
+    case "http_5xx":
+      return {
+        title: "Your server returned an error",
+        guidance: `We fetched ${fileUrl} but your server returned a 5xx error. Fix the route and check again.`,
+        detail: reason,
+      };
+    case "empty_verification_file":
+      return {
+        title: "The file was empty",
+        guidance: `We reached ${fileUrl}, but it didn't contain a token. It must return only the token shown above.`,
+        detail: reason,
+      };
+    case "verification_successful":
+      return {
+        title: "Verification successful",
+        guidance: "Your verification file matched.",
         detail: reason,
       };
     case "blocked_target":
@@ -79,8 +127,8 @@ export function verifyMessage(r: VerifyResultLike, ctx: { fileUrl: string }): Ve
         detail: `http_${r.status}`,
       };
     default:
-      if (reason.startsWith("fetch_status_")) {
-        const code = reason.replace("fetch_status_", "");
+      if (reason.startsWith("http_")) {
+        const code = reason.replace("http_", "");
         return {
           title: "No file found there",
           guidance: `We fetched ${fileUrl} but got HTTP ${code}. Make sure the file exists at your domain root and returns 200.`,

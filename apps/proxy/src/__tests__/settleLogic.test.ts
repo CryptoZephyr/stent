@@ -92,6 +92,13 @@ describe("evaluateBeforeSettle", () => {
     expect(d.insertPayment).not.toHaveBeenCalled();
   });
 
+  it("atomicity: precise upstream network errors still use the public upstream_unavailable abort", async () => {
+    const d = deps({ fetchUpstream: vi.fn(async () => { throw new PublicFetchError("connection_timeout"); }) });
+    const decision = await evaluateBeforeSettle(config(), input, NET, d);
+    expect(decision).toMatchObject({ ok: false, reason: "upstream_unavailable" });
+    expect(d.insertPayment).not.toHaveBeenCalled();
+  });
+
   it("SSRF: blocked upstream targets abort with a specific blocked_target reason", async () => {
     const d = deps({ fetchUpstream: vi.fn(async () => { throw new PublicFetchError("blocked_target"); }) });
     const decision = await evaluateBeforeSettle(config(), input, NET, d);

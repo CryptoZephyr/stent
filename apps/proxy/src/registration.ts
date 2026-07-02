@@ -241,7 +241,9 @@ export function createRegistrationRouter(): Router {
       res.status(200).json({ slug: req.params.slug, verified: true, reason: "already_verified" });
       return;
     }
-    const result = await verifyOwnership(ep.target_url, ep.verification_token);
+    const result = await verifyOwnership(ep.target_url, ep.verification_token, {
+      allowInsecureLoopback: ALLOW_INSECURE,
+    });
     if (!result.verified) {
       res.status(422).json({ slug: req.params.slug, verified: false, reason: result.reason });
       return;

@@ -23,6 +23,10 @@ export interface VerifyResult {
   reason?: string;
   /** The token actually found at the URL (trimmed), when fetched. */
   found?: string;
+  /** The verification URL fetched by the proxy. */
+  verificationUrl?: string;
+  /** HTTP status returned by the verification URL, when a response was received. */
+  httpStatus?: number;
 }
 
 const VERIFICATION_PATH = "/stent-verification.txt";
@@ -125,17 +129,18 @@ export async function resolvePublicHost(
   hostname: string,
   lookup: LookupFn = realLookup
 ): Promise<{ ok: true; addresses: LookupAddr[] } | { ok: false; reason: string }> {
-  if (isBlockedHostname(hostname)) return { ok: false, reason: "blocked_target" };
+  const host = normalizeHostname(hostname);
+  if (isBlockedHostname(host)) return { ok: false, reason: "blocked_target" };
 
-  if (isIP(hostname)) {
-    return isBlockedIp(hostname)
+  if (isIP(host)) {
+    return isBlockedIp(host)
       ? { ok: false, reason: "blocked_target" }
-      : { ok: true, addresses: [{ address: normalizeHostname(hostname), family: isIP(hostname) }] };
+      : { ok: true, addresses: [{ address: host, family: isIP(host) }] };
   }
 
   let addrs: LookupAddr[];
   try {
-    addrs = await lookup(hostname);
+    addrs = await lookup(host);
   } catch {
     return { ok: false, reason: "unresolvable" };
   }
@@ -162,22 +167,51 @@ export interface PublicFetchResult {
 }
 
 export class PublicFetchError extends Error {
-  constructor(public readonly reason: string) {
+  constructor(
+    public readonly reason: string,
+    public readonly detail?: { code?: string; message?: string }
+  ) {
     super(reason);
   }
 }
 
+export interface PublicFetchTrace {
+  dns: Array<{
+    hostname: string;
+    ok: boolean;
+    addresses?: LookupAddr[];
+    reason?: string;
+  }>;
+  attempts: Array<{
+    url: string;
+    address?: string;
+    family?: number;
+    status: "connected" | "failed";
+    errorReason?: string;
+    errorCode?: string;
+    errorMessage?: string;
+  }>;
+  redirects: Array<{ from: string; to: string; status: number }>;
+}
+
+interface PublicFetchOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: Buffer;
+  timeoutMs?: number;
+  lookupImpl?: LookupFn;
+  allowInsecureLoopback?: boolean;
+  maxRedirects?: number;
+  trace?: PublicFetchTrace;
+}
+
+function emptyTrace(): PublicFetchTrace {
+  return { dns: [], attempts: [], redirects: [] };
+}
+
 export async function fetchPublicUrl(
   targetUrl: string,
-  opts: {
-    method?: string;
-    headers?: Record<string, string>;
-    body?: Buffer;
-    timeoutMs?: number;
-    lookupImpl?: LookupFn;
-    allowInsecureLoopback?: boolean;
-    maxRedirects?: number;
-  } = {}
+  opts: PublicFetchOptions = {}
 ): Promise<PublicFetchResult> {
   let url: URL;
   try {
@@ -185,20 +219,14 @@ export async function fetchPublicUrl(
   } catch {
     throw new PublicFetchError("invalid_target_url");
   }
-  return fetchPublicUrlInner(url, opts, opts.maxRedirects ?? 5);
+  return fetchPublicUrlInner(url, opts, opts.maxRedirects ?? 5, new Set([url.toString()]));
 }
 
 async function fetchPublicUrlInner(
   url: URL,
-  opts: {
-    method?: string;
-    headers?: Record<string, string>;
-    body?: Buffer;
-    timeoutMs?: number;
-    lookupImpl?: LookupFn;
-    allowInsecureLoopback?: boolean;
-  },
-  redirectsLeft: number
+  opts: PublicFetchOptions,
+  redirectsLeft: number,
+  seenUrls: Set<string>
 ): Promise<PublicFetchResult> {
   const host = url.hostname;
   const isDevLoopback =
@@ -207,11 +235,16 @@ async function fetchPublicUrlInner(
     throw new PublicFetchError("blocked_target");
   }
 
-  let pinned: LookupAddr | undefined;
+  let pinned: LookupAddr[] | undefined;
   if (!isDevLoopback) {
     const resolved = await resolvePublicHost(host, opts.lookupImpl);
+    opts.trace?.dns.push(
+      resolved.ok
+        ? { hostname: host, ok: true, addresses: resolved.addresses }
+        : { hostname: host, ok: false, reason: resolved.reason }
+    );
     if (!resolved.ok) throw new PublicFetchError(resolved.reason);
-    pinned = resolved.addresses[0];
+    pinned = resolved.addresses;
   }
 
   const result = await requestPinned(url, opts, pinned);
@@ -219,10 +252,14 @@ async function fetchPublicUrlInner(
   if (
     result.status >= 300 &&
     result.status < 400 &&
-    location &&
-    redirectsLeft > 0
+    location
   ) {
+    if (redirectsLeft <= 0) throw new PublicFetchError("redirect_loop");
     const next = new URL(location, url);
+    const nextKey = next.toString();
+    opts.trace?.redirects.push({ from: url.toString(), to: nextKey, status: result.status });
+    if (seenUrls.has(nextKey)) throw new PublicFetchError("redirect_loop");
+    seenUrls.add(nextKey);
     const method = opts.method?.toUpperCase() ?? "GET";
     const shouldDropBody =
       result.status === 303 || ((result.status === 301 || result.status === 302) && method === "POST");
@@ -231,7 +268,8 @@ async function fetchPublicUrlInner(
       shouldDropBody
         ? { ...opts, method: "GET", body: undefined }
         : opts,
-      redirectsLeft - 1
+      redirectsLeft - 1,
+      seenUrls
     );
   }
   return {
@@ -243,12 +281,40 @@ async function fetchPublicUrlInner(
 
 function requestPinned(
   url: URL,
-  opts: {
-    method?: string;
-    headers?: Record<string, string>;
-    body?: Buffer;
-    timeoutMs?: number;
-  },
+  opts: PublicFetchOptions,
+  pinned?: LookupAddr[]
+): Promise<{ status: number; headers: Record<string, string>; body: Buffer }> {
+  const candidates = pinned && pinned.length > 0 ? pinned : [undefined];
+  let lastError: PublicFetchError | undefined;
+
+  const run = async () => {
+    for (const candidate of candidates) {
+      try {
+        return await requestPinnedOnce(url, opts, candidate);
+      } catch (err) {
+        const normalized = normalizeRequestError(err, url.protocol);
+        lastError = normalized;
+        opts.trace?.attempts.push({
+          url: url.toString(),
+          address: candidate?.address,
+          family: candidate?.family,
+          status: "failed",
+          errorReason: normalized.reason,
+          errorCode: normalized.detail?.code,
+          errorMessage: normalized.detail?.message,
+        });
+        if (!isRetryableConnectionFailure(normalized.reason)) throw normalized;
+      }
+    }
+    throw lastError ?? new PublicFetchError("connection_failed");
+  };
+
+  return run();
+}
+
+function requestPinnedOnce(
+  url: URL,
+  opts: PublicFetchOptions,
   pinned?: LookupAddr
 ): Promise<{ status: number; headers: Record<string, string>; body: Buffer }> {
   return new Promise((resolve, reject) => {
@@ -262,25 +328,91 @@ function requestPinned(
       headers: opts.headers,
       timeout: opts.timeoutMs ?? 5000,
       lookup: pinned
-        ? (_hostname, _options, cb) => cb(null, pinned.address, pinned.family)
+        ? createPinnedLookup(pinned)
         : undefined,
     };
     const req = requester(requestOpts, (res: IncomingMessage) => {
       const chunks: Buffer[] = [];
       res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-      res.on("end", () =>
+      res.on("end", () => {
+        opts.trace?.attempts.push({
+          url: url.toString(),
+          address: pinned?.address,
+          family: pinned?.family,
+          status: "connected",
+        });
         resolve({
           status: res.statusCode ?? 0,
           headers: lowerHeaders(res.headers),
           body: Buffer.concat(chunks),
-        })
-      );
+        });
+      });
     });
-    req.on("error", () => reject(new PublicFetchError("unreachable")));
-    req.on("timeout", () => req.destroy(new PublicFetchError("unreachable")));
+    req.on("error", (err) => reject(normalizeRequestError(err, url.protocol)));
+    req.on("timeout", () => req.destroy(new PublicFetchError("connection_timeout")));
     if (opts.body && opts.body.length > 0) req.write(opts.body);
     req.end();
   });
+}
+
+export function createPinnedLookup(pinned: LookupAddr) {
+  return (
+    _hostname: string,
+    options: { all?: boolean } | ((err: NodeJS.ErrnoException | null, address: string, family: number) => void),
+    callback?:
+      | ((err: NodeJS.ErrnoException | null, address: string, family: number) => void)
+      | ((err: NodeJS.ErrnoException | null, addresses: LookupAddr[]) => void)
+  ) => {
+    const cb = (typeof options === "function" ? options : callback) as
+      | ((err: NodeJS.ErrnoException | null, address: string, family: number) => void)
+      | ((err: NodeJS.ErrnoException | null, addresses: LookupAddr[]) => void);
+    const wantsAll = typeof options === "object" && options !== null && options.all === true;
+    if (wantsAll) {
+      (cb as (err: NodeJS.ErrnoException | null, addresses: LookupAddr[]) => void)(null, [pinned]);
+      return;
+    }
+    (cb as (err: NodeJS.ErrnoException | null, address: string, family: number) => void)(
+      null,
+      pinned.address,
+      pinned.family
+    );
+  };
+}
+
+function isRetryableConnectionFailure(reason: string): boolean {
+  return reason === "connection_failed" || reason === "connection_timeout" || reason === "tls_failure";
+}
+
+function normalizeRequestError(err: unknown, protocol: string): PublicFetchError {
+  if (err instanceof PublicFetchError) return err;
+  const e = err as NodeJS.ErrnoException;
+  const code = typeof e?.code === "string" ? e.code : undefined;
+  const name = typeof e?.name === "string" ? e.name : undefined;
+  const message = e?.message ? String(e.message) : String(err);
+  const detail = { code, message };
+  if (
+    code === "ETIMEDOUT" ||
+    code === "ESOCKETTIMEDOUT" ||
+    code === "ABORT_ERR" ||
+    name === "AbortError" ||
+    /timeout/i.test(message)
+  ) {
+    return new PublicFetchError("connection_timeout", detail);
+  }
+  if (
+    protocol === "https:" &&
+    (code === "EPROTO" ||
+      code === "ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE" ||
+      code === "ERR_TLS_CERT_ALTNAME_INVALID" ||
+      code === "DEPTH_ZERO_SELF_SIGNED_CERT" ||
+      code === "SELF_SIGNED_CERT_IN_CHAIN" ||
+      code === "CERT_HAS_EXPIRED" ||
+      code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE" ||
+      /TLS|SSL|certificate|cert/i.test(message))
+  ) {
+    return new PublicFetchError("tls_failure", detail);
+  }
+  return new PublicFetchError("connection_failed", detail);
 }
 
 function lowerHeaders(headers: IncomingMessage["headers"]): Record<string, string> {
@@ -297,52 +429,148 @@ function lowerHeaders(headers: IncomingMessage["headers"]): Record<string, strin
 export async function verifyOwnership(
   targetUrl: string,
   expectedToken: string,
-  opts: { timeoutMs?: number; fetchImpl?: typeof fetch; lookupImpl?: LookupFn } = {}
+  opts: {
+    timeoutMs?: number;
+    fetchImpl?: typeof fetch;
+    lookupImpl?: LookupFn;
+    allowInsecureLoopback?: boolean;
+  } = {}
 ): Promise<VerifyResult> {
   const expected = expectedToken.trim();
-  if (!expected) return { verified: false, reason: "no_expected_token" };
+  const log = {
+    event: "endpoint_verification",
+    targetUrl,
+    verificationUrl: "",
+    dnsResult: [] as PublicFetchTrace["dns"],
+    connectionStatus: [] as PublicFetchTrace["attempts"],
+    redirects: [] as PublicFetchTrace["redirects"],
+    httpStatus: undefined as number | undefined,
+    responseBody: undefined as string | undefined,
+    responseBodyTruncated: false,
+    parsedToken: undefined as string | undefined,
+    expectedToken: expected,
+    resultReason: undefined as string | undefined,
+    failureReason: undefined as string | undefined,
+    verified: false,
+  };
+
+  const finish = (result: VerifyResult): VerifyResult => {
+    log.resultReason = result.reason;
+    log.failureReason = result.verified ? undefined : result.reason;
+    log.verified = result.verified;
+    console.info("[verification]", JSON.stringify(log));
+    return result;
+  };
+
+  if (!expected) return finish({ verified: false, reason: "no_expected_token" });
 
   let url: URL;
   try {
     url = new URL(targetUrl);
   } catch {
-    return { verified: false, reason: "invalid_target_url" };
+    return finish({ verified: false, reason: "invalid_target_url" });
   }
+  const verificationUrl = `${url.origin}${VERIFICATION_PATH}`;
+  log.verificationUrl = verificationUrl;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 5000);
+  const trace = emptyTrace();
   try {
     let status: number;
     let text: string;
     if (opts.fetchImpl) {
       // Tests and explicit callers can inject fetch; production uses the pinned
       // request path below to avoid DNS rebinding between validation and connect.
-      const guard = await assertPublicHost(url.hostname, opts.lookupImpl);
-      if (!guard.ok) return { verified: false, reason: guard.reason };
-      const res = await opts.fetchImpl(`${url.origin}${VERIFICATION_PATH}`, {
-        signal: controller.signal,
-      });
+      const guard = await resolvePublicHost(url.hostname, opts.lookupImpl);
+      log.dnsResult.push(
+        guard.ok
+          ? { hostname: url.hostname, ok: true, addresses: guard.addresses }
+          : { hostname: url.hostname, ok: false, reason: guard.reason }
+      );
+      if (!guard.ok) return finish({ verified: false, reason: verificationReason(guard.reason), verificationUrl });
+      const res = await opts.fetchImpl(verificationUrl, { signal: controller.signal });
       status = res.status;
       text = await res.text();
+      log.connectionStatus.push({ url: verificationUrl, status: "connected" });
     } else {
-      const res = await fetchPublicUrl(`${url.origin}${VERIFICATION_PATH}`, {
+      const res = await fetchPublicUrl(verificationUrl, {
         timeoutMs: opts.timeoutMs ?? 5000,
         lookupImpl: opts.lookupImpl,
+        allowInsecureLoopback: opts.allowInsecureLoopback,
+        trace,
       });
       status = res.status;
       text = res.body.toString("utf8");
+      log.dnsResult = trace.dns;
+      log.connectionStatus = trace.attempts;
+      log.redirects = trace.redirects;
     }
-    if (status < 200 || status >= 300) return { verified: false, reason: `fetch_status_${status}` };
-    const found = text.trim();
+    log.httpStatus = status;
+    log.responseBody = text.length > 4096 ? text.slice(0, 4096) : text;
+    log.responseBodyTruncated = text.length > 4096;
+    if (status < 200 || status >= 300) {
+      return finish({ verified: false, reason: httpFailureReason(status), verificationUrl, httpStatus: status });
+    }
+    const found = text.replace(/^\uFEFF/, "").trim();
+    log.parsedToken = found;
+    if (!found) {
+      return finish({
+        verified: false,
+        reason: "empty_verification_file",
+        found,
+        verificationUrl,
+        httpStatus: status,
+      });
+    }
     return found === expected
-      ? { verified: true, found }
-      : { verified: false, reason: "token_mismatch", found };
+      ? finish({ verified: true, reason: "verification_successful", found, verificationUrl, httpStatus: status })
+      : finish({ verified: false, reason: "token_mismatch", found, verificationUrl, httpStatus: status });
   } catch (err) {
-    if (err instanceof PublicFetchError && err.reason !== "unreachable") {
-      return { verified: false, reason: err.reason };
+    log.dnsResult = trace.dns.length ? trace.dns : log.dnsResult;
+    log.connectionStatus = trace.attempts.length ? trace.attempts : log.connectionStatus;
+    log.redirects = trace.redirects.length ? trace.redirects : log.redirects;
+    if (err instanceof PublicFetchError) {
+      if (log.connectionStatus.length === 0 && isConnectionReason(err.reason)) {
+        log.connectionStatus.push({
+          url: verificationUrl,
+          status: "failed",
+          errorReason: err.reason,
+          errorCode: err.detail?.code,
+          errorMessage: err.detail?.message,
+        });
+      }
+      return finish({ verified: false, reason: verificationReason(err.reason), verificationUrl });
     }
-    return { verified: false, reason: "unreachable" };
+    const normalized = normalizeRequestError(err, url.protocol);
+    if (log.connectionStatus.length === 0 && isConnectionReason(normalized.reason)) {
+      log.connectionStatus.push({
+        url: verificationUrl,
+        status: "failed",
+        errorReason: normalized.reason,
+        errorCode: normalized.detail?.code,
+        errorMessage: normalized.detail?.message,
+      });
+    }
+    return finish({ verified: false, reason: verificationReason(normalized.reason), verificationUrl });
   } finally {
     clearTimeout(timer);
   }
+}
+
+function verificationReason(reason: string): string {
+  if (reason === "unreachable") return "connection_failed";
+  return reason === "unresolvable" ? "dns_lookup_failed" : reason;
+}
+
+function isConnectionReason(reason: string): boolean {
+  return reason === "connection_failed" || reason === "connection_timeout" || reason === "tls_failure";
+}
+
+function httpFailureReason(status: number): string {
+  if (status === 404) return "http_404";
+  if (status >= 500 && status <= 599) return "http_5xx";
+  if (status >= 400 && status <= 499) return "http_4xx";
+  if (status >= 300 && status <= 399) return "http_3xx";
+  return `http_${status}`;
 }
