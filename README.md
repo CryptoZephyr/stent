@@ -276,7 +276,10 @@ Keep `STENT_ALLOW_INSECURE_TARGETS` unset or `false` in production.
 
 ### Dashboard
 
-Deploy `apps/dashboard` as a Next.js app. The workspace commands are:
+Deploy `apps/dashboard` as a Next.js app. The Vercel project is connected to
+this repository with Root Directory set to `apps/dashboard`, so pushes to
+`main` deploy to production automatically. The workspace commands below are
+for local builds:
 
 ```bash
 npm run build --workspace @stent/dashboard
