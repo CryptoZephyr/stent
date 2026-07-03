@@ -11,6 +11,7 @@ const LINKS = [
   { href: "/console", label: "Runs" },
   { href: "/live", label: "Payments" },
   { href: "/agents", label: "Agents" },
+  { href: "/docs", label: "Docs" },
   { href: "/publish", label: "Publish" },
 ];
 

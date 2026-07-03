@@ -100,7 +100,7 @@ The proxy lets publishers onboard without SQL access:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/_api/endpoints` | Create an unverified endpoint and return a verification token. |
-| `POST` | `/_api/endpoints/:slug/verify` | Fetch `{origin}/stent-verification.txt` and mark the endpoint verified on match. |
+| `POST` | `/_api/endpoints/:slug/verify` | Fetch `{origin}/stent-verification.txt`, then check for a matching `X-Stent-Verify` header on `target_url` itself; mark the endpoint verified on either match. |
 | `GET` | `/_api/endpoints` | Return the public directory of active, verified endpoints. |
 | `GET` | `/_api/endpoints/:slug` | Return public status for one endpoint. |
 | `PATCH` | `/_api/endpoints/:slug` | Toggle `active` when the request provides the recorded publisher wallet. |
