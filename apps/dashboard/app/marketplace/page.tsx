@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { NETWORK_LABEL } from "@/lib/config";
 import Link from "next/link";
+import { NETWORK_LABEL } from "@/lib/config";
 import { listEndpoints, type EndpointSummary } from "@/lib/api";
 import { fetchPayments, endpointStatsBySlug, type EndpointStats } from "@/lib/economy";
 import { EndpointCard } from "@/components/marketplace/EndpointCard";
@@ -16,73 +16,68 @@ export default function MarketplacePage() {
 
   useEffect(() => {
     let active = true;
+
     (async () => {
-      const r = await listEndpoints();
+      const result = await listEndpoints();
       if (!active) return;
-      if (r.ok) setEndpoints(r.data);
-      else setErr(r.error);
+      if (result.ok) setEndpoints(result.data);
+      else setErr(result.error);
     })();
-    // Usage stats are a nice-to-have: fetched separately so a Supabase hiccup
-    // never blocks the marketplace listing itself from rendering.
+
     (async () => {
       try {
         const rows = await fetchPayments();
         if (active) setStats(endpointStatsBySlug(rows));
       } catch {
-        // leave stats empty — cards just omit the "calls" stat
+        // Usage stats never block discovery.
       }
     })();
+
     return () => {
       active = false;
     };
   }, []);
 
   return (
-    <>
-      <header className="rig">
-        <div className="rig-inner">
-          <div className="brand-row">
-            <div className="brand">
-              <span className="brand-mark">STENT</span>
-              <span className="badge-402">MARKETPLACE</span>
-            </div>
-            <div className="network">
-              <span className="dot" />
-              {NETWORK_LABEL}
-            </div>
-          </div>
-          <div className="thesis">
-            <p className="eyebrow">
-              <b>Public APIs</b> — pay per call
-            </p>
-            <h1>APIs your agent can pay for.</h1>
-            <p>
-              Every endpoint is paywalled with x402 and settles per request in USDC. Drop one URL
-              into the Stent SDK — no API keys, no accounts, no billing setup.
-            </p>
-          </div>
+    <main className="market-page">
+      <header className="page-hero compact">
+        <div>
+          <p className="page-kicker">Browse paid APIs</p>
+          <h1>Find an API you can call with payment built in.</h1>
+          <p>
+            Every listing is a verified Stent endpoint. Pick one, inspect the price and sample
+            response, then run the paid request from the detail page.
+          </p>
+        </div>
+        <div className="flow-network">
+          <span className="dot" />
+          {NETWORK_LABEL}
         </div>
       </header>
 
-      <main className="mkt">
+      <section className="market-shell" aria-label="Paid API listings">
         {err && <div className="notice err">{err}</div>}
         {!err && !endpoints && <MarketplaceSkeleton />}
         {endpoints && endpoints.length === 0 && (
           <Empty
             center
-            title="No public endpoints yet"
-            desc="Once a publisher registers an API and verifies ownership of its URL, it appears here for every agent to discover."
-            action={<Link href="/publish">Publish the first API →</Link>}
+            title="No paid APIs are live yet"
+            desc="The first verified endpoint will appear here. If you own an API, publish it and Stent will create the paid URL."
+            action={
+              <Link href="/publish" className="btn btn-primary">
+                Publish the first API
+              </Link>
+            }
           />
         )}
         {endpoints && endpoints.length > 0 && (
           <div className="mkt-grid">
-            {endpoints.map((ep) => (
-              <EndpointCard key={ep.slug} ep={ep} stats={stats.get(ep.slug)} />
+            {endpoints.map((endpoint) => (
+              <EndpointCard key={endpoint.slug} ep={endpoint} stats={stats.get(endpoint.slug)} />
             ))}
           </div>
         )}
-      </main>
-    </>
+      </section>
+    </main>
   );
 }

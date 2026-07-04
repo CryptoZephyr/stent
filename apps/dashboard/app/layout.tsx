@@ -2,9 +2,9 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Nav } from "@/components/Nav";
 
-const TITLE = "Stent — put a price on your API";
+const TITLE = "Stent - turn any API into a paid API";
 const DESCRIPTION =
-  "Turn any API into a pay-per-request endpoint. Agents pay per call in USDC; you never touch the payment code.";
+  "Publish a paid API link in minutes. Paste your HTTPS endpoint, set a per-request price, verify ownership, and keep your server unchanged.";
 
 export const metadata: Metadata = {
   title: TITLE,

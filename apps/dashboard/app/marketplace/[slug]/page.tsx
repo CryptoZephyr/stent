@@ -13,131 +13,134 @@ import { EndpointDetailSkeleton } from "@/components/skeletons";
 
 export default function EndpointDetailPage({ params }: { params: { slug: string } }) {
   const { slug } = params;
-  const [ep, setEp] = useState<EndpointStatus | null>(null);
+  const [endpoint, setEndpoint] = useState<EndpointStatus | null>(null);
   const [stats, setStats] = useState<EndpointStats | undefined>(undefined);
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let active = true;
+
     (async () => {
-      const r = await getStatus(slug);
+      const result = await getStatus(slug);
       if (!active) return;
-      if (r.ok) setEp(r.data);
-      else setErr(r.error);
+      if (result.ok) setEndpoint(result.data);
+      else setErr(result.error);
       setLoaded(true);
     })();
-    // Usage stats are a nice-to-have: fetched separately so a Supabase hiccup
-    // never blocks the endpoint detail itself from rendering.
+
     (async () => {
       try {
         const rows = await fetchPayments();
         if (active) setStats(endpointStatsBySlug(rows).get(slug));
       } catch {
-        // leave stats unset — the detail page just omits the "calls" row
+        // Stats are supporting evidence, not required to use the endpoint.
       }
     })();
+
     return () => {
       active = false;
     };
   }, [slug]);
 
   return (
-    <>
-      <header className="rig">
-        <div className="rig-inner">
-          <div className="brand-row">
-            <div className="brand">
-              <span className="brand-mark">STENT</span>
-              <span className="badge-402">MARKETPLACE</span>
-            </div>
-            <div className="network">
-              <span className="dot" />
-              {NETWORK_LABEL}
-            </div>
-          </div>
-          <div className="thesis">
-            <p className="eyebrow">
-              <Link href="/marketplace">← All APIs</Link>
-            </p>
-            <h1 className="mono mkt-detail-slug">{slug}</h1>
-            {ep && (
-              <p>
-                ${ep.price_usdc} per request · earnings to {shortAddr(ep.publisher_wallet)} · settled
-                on {NETWORK_LABEL}
-              </p>
-            )}
-          </div>
+    <main className="endpoint-page">
+      <header className="page-hero compact">
+        <div>
+          <Link href="/marketplace" className="back-link">
+            Back to paid APIs
+          </Link>
+          <p className="page-kicker">Paid API</p>
+          <h1 className="mono">{slug}</h1>
+          <p>
+            Inspect the price, copy the paid URL, confirm the paywall, then run one paid request
+            from this page.
+          </p>
         </div>
+        <a className="btn btn-primary btn-lg" href="#paid-request">
+          Run paid request
+        </a>
       </header>
 
-      <main className="stage">
+      <section className="endpoint-shell">
         {err && <div className="notice err">{err}</div>}
         {!err && !loaded && <EndpointDetailSkeleton />}
 
-        {ep && (
-          <div className="card">
-            <div className="mkt-detail-head">
-              <p className="step-eyebrow">Endpoint</p>
-              <StatusBadge verified={ep.verified} active={ep.active} />
+        {endpoint && (
+          <article className="endpoint-card">
+            <div className="endpoint-title">
+              <div>
+                <p className="page-kicker">What this API returns</p>
+                <h2>{endpoint.description || "A paid API published through Stent."}</h2>
+              </div>
+              <StatusBadge verified={endpoint.verified} active={endpoint.active} />
             </div>
-            <h2 style={{ marginBottom: 8 }}>{ep.description || "A paywalled API behind Stent."}</h2>
 
-            <div className="kv" style={{ marginBottom: 22 }}>
-              <div className="kv-row">
-                <span className="kv-k">Price</span>
-                <span className="kv-v">${ep.price_usdc} / request</span>
+            <dl className="endpoint-facts">
+              <div>
+                <dt>Price</dt>
+                <dd className="mono">${endpoint.price_usdc} / request</dd>
               </div>
-              <div className="kv-row">
-                <span className="kv-k">Publisher</span>
-                <span className="kv-v">{shortAddr(ep.publisher_wallet)}</span>
+              <div>
+                <dt>Publisher earnings</dt>
+                <dd className="mono">{shortAddr(endpoint.publisher_wallet)}</dd>
               </div>
-              <div className="kv-row">
-                <span className="kv-k">Network</span>
-                <span className="kv-v">{NETWORK_LABEL}</span>
+              <div>
+                <dt>Network</dt>
+                <dd className="mono">{NETWORK_LABEL}</dd>
               </div>
               {stats && stats.calls > 0 && (
-                <div className="kv-row">
-                  <span className="kv-k">Calls</span>
-                  <span className="kv-v">
+                <div>
+                  <dt>Recent use</dt>
+                  <dd className="mono">
                     {formatCount(stats.calls)}
-                    {stats.lastActiveAt ? ` · last active ${timeAgo(stats.lastActiveAt)}` : ""}
-                  </span>
+                    {stats.lastActiveAt ? ` · ${timeAgo(stats.lastActiveAt)}` : ""}
+                  </dd>
                 </div>
               )}
-            </div>
+            </dl>
 
-            <p className="step-eyebrow">Public URL</p>
-            <InlineCopy value={endpointUrl(ep.slug)} />
+            <section className="request-block" aria-labelledby="public-url">
+              <div>
+                <h3 id="public-url">Paid URL</h3>
+                <p className="hint">Use this URL from your app, agent loop, or integration test.</p>
+              </div>
+              <InlineCopy value={endpointUrl(endpoint.slug)} />
+            </section>
 
-            {ep.sample_response && (
-              <>
-                <p className="step-eyebrow" style={{ marginTop: 22 }}>
-                  Sample response
-                </p>
-                <p className="hint" style={{ marginBottom: 10 }}>
-                  Captured automatically from this endpoint when it verified — what a paid
-                  request actually returns.
-                </p>
-                <CodeBlock code={ep.sample_response} filename="response" />
-              </>
+            {endpoint.sample_response && (
+              <section className="request-block" aria-labelledby="sample-response">
+                <div>
+                  <h3 id="sample-response">Sample response</h3>
+                  <p className="hint">
+                    Captured automatically when the publisher verified the endpoint.
+                  </p>
+                </div>
+                <CodeBlock code={endpoint.sample_response} filename="response" />
+              </section>
             )}
 
-            <p className="step-eyebrow" style={{ marginTop: 22 }}>
-              Integrate with the Stent SDK
-            </p>
-            <p className="hint" style={{ marginBottom: 10 }}>
-              The SDK detects the 402, pays in USDC, and returns your data — no keys, no accounts.
-            </p>
-            <CodeBlock code={sdkSnippet(ep.slug)} filename="agent.ts" />
+            <section className="request-block" aria-labelledby="paywall-check">
+              <div>
+                <h3 id="paywall-check">Confirm the paywall</h3>
+                <p className="hint">An unpaid request should stop at HTTP 402.</p>
+              </div>
+              <CodeBlock code={curlSnippet(endpoint.slug)} filename="terminal" />
+            </section>
 
-            <p className="step-eyebrow" style={{ marginTop: 22 }}>
-              Or see the paywall with curl
-            </p>
-            <CodeBlock code={curlSnippet(ep.slug)} filename="terminal" />
-          </div>
+            <section className="request-block" id="paid-request" aria-labelledby="paid-request-title">
+              <div>
+                <h3 id="paid-request-title">Make the paid request</h3>
+                <p className="hint">
+                  Use a funded buyer wallet and a spend cap. The SDK pays, retries, and returns the
+                  API response.
+                </p>
+              </div>
+              <CodeBlock code={sdkSnippet(endpoint.slug)} filename="agent.ts" />
+            </section>
+          </article>
         )}
-      </main>
-    </>
+      </section>
+    </main>
   );
 }

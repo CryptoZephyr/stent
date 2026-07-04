@@ -6,107 +6,14 @@ import { connectInjected, isAddress, shortAddr } from "@/lib/wallet";
 import type { RegisterDraft } from "@/lib/api";
 import { registerEndpoint, verifyEndpoint, type RegisterInput, type RegisterOk } from "@/lib/api";
 import { verifyMessage, type VerifyMessage } from "@/lib/verifyMessages";
-import { PROXY_URL, NETWORK_LABEL } from "@/lib/config";
+import { NETWORK_LABEL, PROXY_URL } from "@/lib/config";
 import { endpointUrl, sdkSnippet, curlSnippet } from "@/lib/snippet";
-import { Copy, CodeBlock, InlineCopy, StatusBadge } from "./ui";
+import { CodeBlock, InlineCopy, StatusBadge } from "./ui";
 
-// Verification auto-poll: re-check every POLL_MS for up to WINDOW_MS.
 const POLL_MS = 3000;
 const WINDOW_MS = 60000;
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,39}$/;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-/* ── 01 · Connect ───────────────────────────────────────────────────────── */
-
-export function ConnectStep({ onConnect }: { onConnect: (addr: string) => void }) {
-  const [pasting, setPasting] = useState(true);
-  const [addr, setAddr] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function connect() {
-    setErr(null);
-    setBusy(true);
-    try {
-      onConnect(await connectInjected());
-    } catch (e) {
-      const code = (e as Error).message;
-      setErr(
-        code === "no_wallet"
-          ? "No browser wallet detected. Paste your payout address instead."
-          : "Wallet connection was cancelled."
-      );
-      setPasting(true);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function usePasted() {
-    const a = addr.trim();
-    if (!isAddress(a)) {
-      setErr("That doesn't look like a wallet address (0x…, 42 characters).");
-      return;
-    }
-    // Match the proxy's server-side guard (viem isAddress) so a bad EIP-55
-    // checksum is caught here, not after the whole form is filled in.
-    if (!isChecksumAddress(a)) {
-      setErr("That address's checksum doesn't match — re-copy it, or paste it in all-lowercase.");
-      return;
-    }
-    onConnect(a);
-  }
-
-  return (
-    <div className="card">
-      <p className="step-eyebrow">Step 01 — Payout address</p>
-      <h2>Where should earnings land?</h2>
-      <p className="lede">
-        Every paid request settles in USDC to one wallet. You&apos;re not signing anything —
-        agents pay <em>into</em> this address. You just need it on file.
-      </p>
-
-      {!pasting ? (
-        <div className="btn-row">
-          <button className="btn btn-primary" onClick={connect} disabled={busy}>
-            {busy ? "Opening wallet…" : "Connect wallet"}
-          </button>
-          <button className="btn btn-ghost" onClick={() => setPasting(true)}>
-            Paste an address instead
-          </button>
-        </div>
-      ) : (
-        <div className="field" style={{ marginTop: 4 }}>
-          <label className="label" htmlFor="addr">
-            Payout address
-          </label>
-          <input
-            id="addr"
-            className={`input ${err ? "bad" : ""}`}
-            placeholder="0x…"
-            value={addr}
-            onChange={(e) => {
-              setAddr(e.target.value);
-              setErr(null);
-            }}
-            onKeyDown={(e) => e.key === "Enter" && usePasted()}
-          />
-          <div className="btn-row" style={{ marginTop: 14 }}>
-            <button className="btn btn-primary" onClick={usePasted}>
-              Continue
-            </button>
-            <button className="btn btn-ghost" onClick={() => setPasting(false)}>
-              Use a wallet
-            </button>
-          </div>
-        </div>
-      )}
-
-      {err && <div className="notice err">{err}</div>}
-    </div>
-  );
-}
-
-/* ── 02 · Register ──────────────────────────────────────────────────────── */
 
 function deriveSlug(url: string): string {
   try {
@@ -114,199 +21,338 @@ function deriveSlug(url: string): string {
     const seg = u.pathname.split("/").filter(Boolean).pop();
     const host = u.hostname.replace(/^www\./, "").split(".")[0];
     const raw = seg && seg.length > 1 ? seg : host;
-    return (raw || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+    return (raw || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40);
   } catch {
     return "";
   }
 }
 
-const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,39}$/;
+function validateDraft(draft: RegisterDraft): { ok: true } | { ok: false; errors: Record<string, string> } {
+  const errors: Record<string, string> = {};
+  let parsed: URL | null = null;
 
-export function RegisterStep({
-  wallet,
-  draft,
-  onDraft,
-  onChangeWallet,
-  onRegistered,
-}: {
-  wallet: string;
-  draft: RegisterDraft;
-  onDraft: (patch: Partial<RegisterDraft>) => void;
-  onChangeWallet: () => void;
-  onRegistered: (reg: RegisterOk, input: RegisterInput) => void;
-}) {
-  // Form fields live on the parent page (RegisterDraft) so they survive a trip
-  // back to Connect (e.g. "change" the payout address) without being wiped.
-  const { url, slug, slugTouched, price, desc } = draft;
-  const [busy, setBusy] = useState(false);
-  const [errs, setErrs] = useState<Record<string, string>>({});
-  const [formErr, setFormErr] = useState<string | null>(null);
-
-  function validate(): RegisterInput | null {
-    const e: Record<string, string> = {};
-    let parsed: URL | null = null;
-    try {
-      parsed = new URL(url.trim());
-    } catch {
-      e.url = "Enter a full URL, like https://api.yoursite.com/data";
-    }
-    if (parsed && parsed.protocol !== "https:") e.url = "The URL must use https://";
-    if (!SLUG_RE.test(slug.trim()))
-      e.slug = "Lowercase letters, numbers, and hyphens. 2–40 characters.";
-    const p = Number(price);
-    if (!/^\d+(\.\d{1,6})?$/.test(price.trim()) || p <= 0)
-      e.price = "A positive amount, up to 6 decimals (e.g. 0.001).";
-    else if (p > 1000) e.price = "Keep it under 1000 for now.";
-    setErrs(e);
-    if (Object.keys(e).length) return null;
-    return {
-      slug: slug.trim(),
-      target_url: url.trim(),
-      price_usdc: price.trim(),
-      publisher_wallet: wallet,
-      description: desc.trim() || undefined,
-    };
+  try {
+    parsed = new URL(draft.url.trim());
+  } catch {
+    errors.url = "Enter a full URL, like https://api.yoursite.com/data.";
   }
 
-  async function submit() {
-    setFormErr(null);
-    const input = validate();
-    if (!input) return;
-    setBusy(true);
-    const res = await registerEndpoint(input);
-    setBusy(false);
-    if (res.ok) {
-      onRegistered(res.data, input);
+  if (parsed && parsed.protocol !== "https:") {
+    errors.url = "Use an https:// endpoint. Stent only publishes secure URLs.";
+  }
+
+  if (!SLUG_RE.test(draft.slug.trim())) {
+    errors.slug = "Use lowercase letters, numbers, and hyphens. Keep it 2-40 characters.";
+  }
+
+  const price = Number(draft.price);
+  if (!/^\d+(\.\d{1,6})?$/.test(draft.price.trim()) || price <= 0) {
+    errors.price = "Enter a positive USDC amount, up to 6 decimals.";
+  } else if (price > 1000) {
+    errors.price = "Keep the price under 1000 USDC for now.";
+  }
+
+  return Object.keys(errors).length ? { ok: false, errors } : { ok: true };
+}
+
+export function ApiStep({
+  draft,
+  onDraft,
+  onContinue,
+}: {
+  draft: RegisterDraft;
+  onDraft: (patch: Partial<RegisterDraft>) => void;
+  onContinue: () => void;
+}) {
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  function next() {
+    const result = validateDraft(draft);
+    if (!result.ok) {
+      setErrors(result.errors);
       return;
     }
-    if (res.status === 409) setErrs((p) => ({ ...p, slug: "Taken — try another id." }));
-    else if (res.details?.length) {
-      // map server validation to fields
-      const e: Record<string, string> = {};
-      for (const d of res.details) {
-        if (d.includes("slug")) e.slug = d;
-        else if (d.includes("target_url")) e.url = d;
-        else if (d.includes("price")) e.price = d;
-        else if (d.includes("wallet")) e.wallet = d;
-      }
-      setErrs(e);
-    } else setFormErr(res.error);
+    setErrors({});
+    onContinue();
   }
 
   return (
-    <div className="card">
-      <p className="step-eyebrow">Step 02 — Register</p>
-      <h2>Point Stent at your API</h2>
+    <div className="flow-card">
+      <p className="page-kicker">API details</p>
+      <h2>What API should Stent sell access to?</h2>
       <p className="lede">
-        Stent sits in front of this URL and adds the paywall. Your server stays exactly as it is.
+        Start with one endpoint. Stent will create a paid public URL and forward successful paid
+        requests to the URL you enter here.
       </p>
 
       <div className="field">
         <label className="label" htmlFor="url">
-          Your API endpoint <span className="req">*</span>
+          Existing HTTPS endpoint
         </label>
         <input
           id="url"
-          className={`input ${errs.url ? "bad" : ""}`}
+          className={`input ${errors.url ? "bad" : ""}`}
           placeholder="https://api.yoursite.com/data"
-          value={url}
+          value={draft.url}
           onChange={(e) => {
-            const v = e.target.value;
-            onDraft(slugTouched ? { url: v } : { url: v, slug: deriveSlug(v) });
-            setErrs((p) => ({ ...p, url: "" }));
+            const url = e.target.value;
+            onDraft(draft.slugTouched ? { url } : { url, slug: deriveSlug(url) });
+            setErrors((current) => ({ ...current, url: "" }));
           }}
+          onKeyDown={(e) => e.key === "Enter" && next()}
         />
-        {errs.url ? (
-          <div className="field-error">{errs.url}</div>
+        {errors.url ? (
+          <p className="field-error">{errors.url}</p>
         ) : (
-          <div className="hint">Must be reachable over https. Stent forwards each paid request here.</div>
+          <p className="hint">Your API keeps returning the same data. Stent adds paid access.</p>
         )}
       </div>
 
       <div className="grid-2">
         <div className="field">
           <label className="label" htmlFor="slug">
-            Endpoint id <span className="req">*</span>
+            Paid URL name
           </label>
           <input
             id="slug"
-            className={`input ${errs.slug ? "bad" : ""}`}
+            className={`input ${errors.slug ? "bad" : ""}`}
             placeholder="weather-now"
-            value={slug}
+            value={draft.slug}
             onChange={(e) => {
               onDraft({ slug: e.target.value, slugTouched: true });
-              setErrs((p) => ({ ...p, slug: "" }));
+              setErrors((current) => ({ ...current, slug: "" }));
             }}
+            onKeyDown={(e) => e.key === "Enter" && next()}
           />
-          {errs.slug ? (
-            <div className="field-error">{errs.slug}</div>
+          {errors.slug ? (
+            <p className="field-error">{errors.slug}</p>
           ) : (
-            <div className="hint">Your public path: {PROXY_URL}/{slug || "weather-now"}</div>
+            <p className="hint">
+              Paid URL preview: {PROXY_URL}/{draft.slug || "weather-now"}
+            </p>
           )}
         </div>
 
         <div className="field">
           <label className="label" htmlFor="price">
-            Price per request <span className="req">*</span>
+            Price per successful request
           </label>
           <div className="input-prefix">
             <span className="pfx">$</span>
             <input
               id="price"
-              className={`input ${errs.price ? "bad" : ""}`}
+              className={`input ${errors.price ? "bad" : ""}`}
               inputMode="decimal"
               placeholder="0.001"
-              value={price}
+              value={draft.price}
               onChange={(e) => {
                 onDraft({ price: e.target.value });
-                setErrs((p) => ({ ...p, price: "" }));
+                setErrors((current) => ({ ...current, price: "" }));
               }}
+              onKeyDown={(e) => e.key === "Enter" && next()}
             />
           </div>
-          {errs.price ? (
-            <div className="field-error">{errs.price}</div>
+          {errors.price ? (
+            <p className="field-error">{errors.price}</p>
           ) : (
-            <div className="hint">USDC, charged per call.</div>
+            <p className="hint">Charged only when Stent forwards a successful paid request.</p>
           )}
         </div>
       </div>
 
-      <div className="field">
-        <label className="label" htmlFor="desc">
-          Description <span className="muted">(optional)</span>
-        </label>
-        <textarea
-          id="desc"
-          className="textarea"
-          placeholder="What does this endpoint return? Agents see this in the directory."
-          value={desc}
-          onChange={(e) => onDraft({ desc: e.target.value })}
-          maxLength={280}
-        />
-      </div>
-
-      <div className="divider" />
-
-      <div className="btn-row between">
-        <div className="wallet-chip">
-          <span className="avatar" />
-          <span className="addr">{shortAddr(wallet)}</span>
-          <button className="swap" onClick={onChangeWallet}>
-            change
-          </button>
-        </div>
-        <button className="btn btn-primary" onClick={submit} disabled={busy}>
-          {busy ? "Creating…" : "Create endpoint"}
+      <div className="action-row">
+        <button className="btn btn-primary" onClick={next}>
+          Continue to earnings
         </button>
       </div>
 
-      {errs.wallet && <div className="notice err">{errs.wallet}</div>}
-      {formErr && <div className="notice err">{formErr}</div>}
+      <details className="optional-field">
+        <summary>Add marketplace description</summary>
+        <div className="field">
+          <label className="label" htmlFor="desc">
+            What will buyers receive?
+          </label>
+          <textarea
+            id="desc"
+            className="textarea"
+            placeholder="Describe the response buyers will receive."
+            value={draft.desc}
+            onChange={(e) => onDraft({ desc: e.target.value })}
+            maxLength={280}
+          />
+          <p className="hint">Optional. You can publish without this.</p>
+        </div>
+      </details>
     </div>
   );
 }
 
-/* ── 03 · Verify ────────────────────────────────────────────────────────── */
+export function EarningsStep({
+  draft,
+  wallet,
+  onWallet,
+  onBack,
+  onRegistered,
+}: {
+  draft: RegisterDraft;
+  wallet: string | null;
+  onWallet: (wallet: string) => void;
+  onBack: () => void;
+  onRegistered: (reg: RegisterOk, input: RegisterInput) => void;
+}) {
+  const [addr, setAddr] = useState(wallet ?? "");
+  const [mode, setMode] = useState<"paste" | "wallet">("paste");
+  const [busy, setBusy] = useState(false);
+  const [registering, setRegistering] = useState(false);
+  const [addrErr, setAddrErr] = useState<string | null>(null);
+  const [formErr, setFormErr] = useState<string | null>(null);
+
+  async function useWallet() {
+    setAddrErr(null);
+    setFormErr(null);
+    setBusy(true);
+    try {
+      const connected = await connectInjected();
+      setAddr(connected);
+      onWallet(connected);
+      setMode("paste");
+    } catch (e) {
+      const code = (e as Error).message;
+      setFormErr(
+        code === "no_wallet"
+          ? "No browser wallet detected. Paste the payout address instead."
+          : "Wallet connection was canceled."
+      );
+      setMode("paste");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function validateAddress(): string | null {
+    const value = addr.trim();
+    if (!isAddress(value)) return "Enter a wallet address that starts with 0x and has 42 characters.";
+    if (!isChecksumAddress(value)) return "That address checksum does not match. Re-copy it or paste it in all lowercase.";
+    return null;
+  }
+
+  async function createEndpoint() {
+    const addressError = validateAddress();
+    if (addressError) {
+      setAddrErr(addressError);
+      return;
+    }
+
+    const draftResult = validateDraft(draft);
+    if (!draftResult.ok) {
+      setFormErr("Go back and fix the API details before creating the paid URL.");
+      return;
+    }
+
+    const publisher_wallet = addr.trim();
+    onWallet(publisher_wallet);
+    const input: RegisterInput = {
+      slug: draft.slug.trim(),
+      target_url: draft.url.trim(),
+      price_usdc: draft.price.trim(),
+      publisher_wallet,
+      description: draft.desc.trim() || undefined,
+    };
+
+    setAddrErr(null);
+    setFormErr(null);
+    setRegistering(true);
+    const result = await registerEndpoint(input);
+    setRegistering(false);
+
+    if (result.ok) {
+      onRegistered(result.data, input);
+      return;
+    }
+
+    if (result.status === 409) setFormErr("That paid URL name is taken. Go back and choose another.");
+    else if (result.details?.length) setFormErr(result.details[0]);
+    else setFormErr(result.error);
+  }
+
+  return (
+    <div className="flow-card">
+      <p className="page-kicker">Earnings</p>
+      <h2>Where should paid requests send USDC?</h2>
+      <p className="lede">
+        This is the payout address for every successful paid request. You are not signing anything
+        to publish; Stent only needs the destination address.
+      </p>
+
+      <div className="endpoint-summary">
+        <div>
+          <span>Paid URL</span>
+          <strong className="mono">{PROXY_URL}/{draft.slug || "your-api"}</strong>
+        </div>
+        <div>
+          <span>Price</span>
+          <strong className="mono">${draft.price || "0.001"} / request</strong>
+        </div>
+      </div>
+
+      {mode === "wallet" ? (
+        <div className="action-row">
+          <button className="btn btn-primary" onClick={useWallet} disabled={busy}>
+            {busy ? "Opening wallet..." : "Connect wallet"}
+          </button>
+          <button className="btn btn-quiet" onClick={() => setMode("paste")}>
+            Paste address instead
+          </button>
+        </div>
+      ) : (
+        <div className="field">
+          <label className="label" htmlFor="payout">
+            Payout address
+          </label>
+          <input
+            id="payout"
+            className={`input ${addrErr ? "bad" : ""}`}
+            placeholder="0x..."
+            value={addr}
+            onChange={(e) => {
+              setAddr(e.target.value);
+              setAddrErr(null);
+              setFormErr(null);
+            }}
+            onKeyDown={(e) => e.key === "Enter" && createEndpoint()}
+          />
+          {addrErr ? (
+            <p className="field-error">{addrErr}</p>
+          ) : (
+            <p className="hint">Use the address that should receive publisher earnings.</p>
+          )}
+        </div>
+      )}
+
+      {formErr && <div className="notice err">{formErr}</div>}
+
+      <div className="action-row between">
+        <button className="btn btn-quiet" onClick={onBack}>
+          Back to API details
+        </button>
+        <div className="action-row compact">
+          {mode === "paste" && (
+            <button className="btn btn-ghost" onClick={() => setMode("wallet")}>
+              Use a wallet
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={createEndpoint} disabled={registering}>
+            {registering ? "Creating..." : "Create paid URL"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function VerifyStep({
   reg,
@@ -321,14 +367,16 @@ export function VerifyStep({
 }) {
   const [phase, setPhase] = useState<"idle" | "checking" | "failed">("idle");
   const [msg, setMsg] = useState<VerifyMessage | null>(null);
-  const [progress, setProgress] = useState(0); // 0..1 across the polling window
+  const [progress, setProgress] = useState(0);
   const cancelRef = useRef(false);
   const fileUrl = `${origin}/stent-verification.txt`;
 
-  // Stop polling if the publisher leaves this step.
-  useEffect(() => () => {
-    cancelRef.current = true;
-  }, []);
+  useEffect(
+    () => () => {
+      cancelRef.current = true;
+    },
+    []
+  );
 
   async function poll() {
     cancelRef.current = false;
@@ -336,19 +384,21 @@ export function VerifyStep({
     setMsg(null);
     setProgress(0);
     const deadline = Date.now() + WINDOW_MS;
+
     while (!cancelRef.current) {
-      const r = await verifyEndpoint(reg.slug);
+      const result = await verifyEndpoint(reg.slug);
       if (cancelRef.current) return;
-      if (r.verified) {
+      if (result.verified) {
         onVerified();
         return;
       }
-      setMsg(verifyMessage(r, { fileUrl })); // remember the latest reason for the timeout state
+      setMsg(verifyMessage(result, { fileUrl }));
       const remaining = deadline - Date.now();
       setProgress(Math.min(1, 1 - remaining / WINDOW_MS));
       if (remaining <= POLL_MS) break;
       await sleep(POLL_MS);
     }
+
     if (!cancelRef.current) {
       setProgress(1);
       setPhase("failed");
@@ -361,79 +411,62 @@ export function VerifyStep({
   }
 
   return (
-    <div className="card">
-      <p className="step-eyebrow">Step 03 — Verify</p>
-      <h2>Prove the API is yours</h2>
+    <div className="flow-card">
+      <p className="page-kicker">Ownership</p>
+      <h2>Prove this API is yours.</h2>
       <p className="lede">
-        One quick check stops anyone else from paywalling your URL. Make your server return this
-        token, then we&apos;ll confirm it.
+        This check prevents someone else from charging for your URL. Add the token once, then
+        Stent verifies it automatically.
       </p>
 
-      <div className="url-map" aria-label="Where the verification file goes">
-        <div className="url-row top">
-          <span className="url-k">Your API</span>
-          <span className="url-v mono">{targetUrl || `${origin}/…`}</span>
+      <div className="verify-map">
+        <div>
+          <span>Your API</span>
+          <strong className="mono">{targetUrl || `${origin}/...`}</strong>
         </div>
-        <div className="url-row">
-          <span className="url-k">Verification file</span>
-          <span className="url-v file mono">{fileUrl}</span>
+        <div>
+          <span>Verification file</span>
+          <strong className="mono">{fileUrl}</strong>
         </div>
-        <div className="url-note">same host · domain root · not under your API path</div>
       </div>
 
-      <ol className="ol" style={{ marginTop: 18 }}>
-        <li>
-          Make your server return this exact token as plain text:
-          <div style={{ height: 8 }} />
+      <div className="verify-steps">
+        <article>
+          <h3>1. Return this exact token as plain text</h3>
           <InlineCopy value={reg.verification_token} />
-          <div className="hint" style={{ marginTop: 8 }}>
-            Token only — no quotes, HTML, or extra lines.
-          </div>
-        </li>
-        <li style={{ paddingTop: 14 }}>
-          …served at this exact URL:
-          <div style={{ height: 8 }} />
+          <p className="hint">Token only. No quotes, HTML, or extra lines.</p>
+        </article>
+        <article>
+          <h3>2. Serve it at this URL</h3>
           <InlineCopy value={fileUrl} />
-        </li>
-      </ol>
+          <p className="hint">Same host, domain root. Stent checks this first.</p>
+        </article>
+      </div>
 
       <details className="host-help">
-        <summary>How do I host this file?</summary>
+        <summary>Use a response header instead</summary>
         <div className="host-body">
           <p>
-            <strong>Static site:</strong> add a file named{" "}
-            <span className="mono">stent-verification.txt</span> at your web root containing only
-            the token.
+            If you cannot add a root file, return this header from the API endpoint itself. Stent
+            checks the file first, then the header.
           </p>
-          <p style={{ marginBottom: 8 }}>
-            <strong>Express / Node:</strong>
-          </p>
-          <CodeBlock
-            code={`app.get("/stent-verification.txt", (_req, res) =>\n  res.type("text/plain").send("${reg.verification_token}")\n);`}
-          />
-          <p style={{ marginTop: 10 }}>
-            Can&apos;t add a file at your domain&apos;s root — shared hosting, a managed API
-            gateway, or a subpath-only deployment? Instead, return this header on your API
-            endpoint&apos;s own response:
-          </p>
-          <div style={{ height: 8 }} />
           <InlineCopy value={`X-Stent-Verify: ${reg.verification_token}`} />
-          <div className="hint" style={{ marginTop: 8 }}>
-            We check the file first, then this header on {targetUrl || "your API endpoint"} —
-            either one verifies.
-          </div>
+          <CodeBlock
+            filename="server.ts"
+            code={`app.get("/data", (_req, res) => {\n  res.set("X-Stent-Verify", "${reg.verification_token}");\n  res.json({ ok: true });\n});`}
+          />
         </div>
       </details>
 
       {phase === "checking" ? (
-        <div style={{ marginTop: 22 }}>
+        <div className="check-wrap">
           <div className="check" role="status" aria-live="polite">
             <span className="spinner" aria-hidden="true" />
             <div>
-              <div className="check-text">Checking for your file…</div>
-              <div className="check-sub">We&apos;ll keep trying for about a minute.</div>
+              <div className="check-text">Checking for verification...</div>
+              <div className="check-sub">Stent will keep trying for about a minute.</div>
             </div>
-            <button className="btn btn-ghost" style={{ marginLeft: "auto" }} onClick={stop}>
+            <button className="btn btn-quiet" onClick={stop}>
               Stop
             </button>
           </div>
@@ -442,12 +475,12 @@ export function VerifyStep({
           </div>
         </div>
       ) : (
-        <div className="btn-row" style={{ marginTop: 22 }}>
+        <div className="action-row">
           <button className="btn btn-primary" onClick={poll}>
-            {phase === "failed" ? "Check again" : "I've added the file — check"}
+            {phase === "failed" ? "Check again" : "Check verification"}
           </button>
-          <a className="btn btn-ghost" href={fileUrl} target="_blank" rel="noreferrer">
-            Open the file
+          <a className="text-link" href={fileUrl} target="_blank" rel="noreferrer">
+            Open verification URL
           </a>
         </div>
       )}
@@ -455,19 +488,15 @@ export function VerifyStep({
       {phase === "failed" && msg && (
         <div className="notice err">
           <strong>{msg.title}</strong>
-          <p style={{ margin: "4px 0 0" }}>{msg.guidance}</p>
-          <p style={{ margin: "8px 0 0", fontSize: 12, opacity: 0.7 }}>
-            details: <span className="mono">{msg.detail}</span>
-          </p>
+          <p>{msg.guidance}</p>
+          <small className="mono">details: {msg.detail}</small>
         </div>
       )}
     </div>
   );
 }
 
-/* ── 04 · Live ──────────────────────────────────────────────────────────── */
-
-export function LiveStep({
+export function FirstPaidRequestStep({
   slug,
   price,
   wallet,
@@ -479,53 +508,60 @@ export function LiveStep({
   onReset: () => void;
 }) {
   return (
-    <div className="card">
-      <p className="step-eyebrow" style={{ color: "var(--live-2)" }}>
-        Step 04 — Live
-      </p>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <h2 style={{ marginBottom: 0 }}>Your endpoint is live</h2>
+    <div className="flow-card success-card">
+      <div className="success-head">
+        <div>
+          <p className="page-kicker">First paid request</p>
+          <h2>Your paid API is live. Now run one paid call.</h2>
+        </div>
         <StatusBadge verified active />
       </div>
-      <p className="lede" style={{ marginTop: 10 }}>
-        Stent now charges <strong>${price}</strong> in USDC per request and forwards each paid call
-        to your API. Hand this to any agent developer.
+
+      <p className="lede">
+        Stent charges <strong>${price}</strong> per successful request and forwards paid calls to
+        your API. The last activation step is proving the buyer path works.
       </p>
 
-      <div className="kv">
-        <div className="kv-row">
-          <span className="kv-k">Public URL</span>
-          <span className="kv-v">{endpointUrl(slug)}</span>
+      <div className="endpoint-summary">
+        <div>
+          <span>Public URL</span>
+          <strong className="mono">{endpointUrl(slug)}</strong>
         </div>
-        <div className="kv-row">
-          <span className="kv-k">Price</span>
-          <span className="kv-v">${price} / request</span>
+        <div>
+          <span>Earnings</span>
+          <strong className="mono">{shortAddr(wallet)}</strong>
         </div>
-        <div className="kv-row">
-          <span className="kv-k">Earnings to</span>
-          <span className="kv-v">{shortAddr(wallet)}</span>
-        </div>
-        <div className="kv-row">
-          <span className="kv-k">Network</span>
-          <span className="kv-v">{NETWORK_LABEL}</span>
+        <div>
+          <span>Network</span>
+          <strong className="mono">{NETWORK_LABEL}</strong>
         </div>
       </div>
 
-      <div style={{ height: 24 }} />
-      <p className="label" style={{ marginBottom: 10 }}>
-        Drop-in for an agent (TypeScript)
-      </p>
-      <CodeBlock code={sdkSnippet(slug)} />
+      <section className="request-block" aria-labelledby="paywall-check">
+        <div>
+          <h3 id="paywall-check">First, confirm the paywall</h3>
+          <p className="hint">This unpaid request should return HTTP 402.</p>
+        </div>
+        <CodeBlock code={curlSnippet(slug)} filename="terminal" />
+      </section>
 
-      <div style={{ height: 14 }} />
-      <p className="label" style={{ marginBottom: 10 }}>
-        Or see the paywall yourself
-      </p>
-      <CodeBlock code={curlSnippet(slug)} />
+      <section className="request-block" aria-labelledby="paid-request">
+        <div>
+          <h3 id="paid-request">Then complete a paid request</h3>
+          <p className="hint">
+            Use a funded buyer wallet with a small spend cap. The SDK pays once, retries, and
+            prints your API response.
+          </p>
+        </div>
+        <CodeBlock code={sdkSnippet(slug)} filename="first-paid-request.ts" />
+      </section>
 
-      <div className="btn-row" style={{ marginTop: 24 }}>
-        <button className="btn btn-ghost" onClick={onReset}>
-          Register another endpoint
+      <div className="action-row between">
+        <a className="btn btn-primary" href={`/marketplace/${slug}`}>
+          Open live listing
+        </a>
+        <button className="btn btn-quiet" onClick={onReset}>
+          Publish another API
         </button>
       </div>
     </div>

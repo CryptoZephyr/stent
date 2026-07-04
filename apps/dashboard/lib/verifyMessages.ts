@@ -36,7 +36,7 @@ export function verifyMessage(r: VerifyResultLike, ctx: { fileUrl: string }): Ve
       return {
         title: "The file didn't contain the right token",
         guidance:
-          "We reached your file but the contents didn't match. It must return only the token — no quotes, no HTML, no extra spaces or lines.",
+          "We reached your file but the contents didn't match. It must return only the token. No quotes, HTML, extra spaces, or extra lines.",
         detail: reason,
       };
     case "dns_lookup_failed":
@@ -97,7 +97,7 @@ export function verifyMessage(r: VerifyResultLike, ctx: { fileUrl: string }): Ve
       return {
         title: "That address isn't public",
         guidance:
-          "Your endpoint URL resolves to a private or internal address (localhost, a LAN IP, or a cloud-metadata address). Stent only verifies endpoints reachable on the public internet — re-register with a public https URL.",
+          "Your endpoint URL resolves to a private or internal address (localhost, a LAN IP, or a cloud-metadata address). Stent only verifies endpoints reachable on the public internet. Re-register with a public https URL.",
         detail: reason,
       };
     case "invalid_target_url":
@@ -117,7 +117,7 @@ export function verifyMessage(r: VerifyResultLike, ctx: { fileUrl: string }): Ve
     case "not_found":
       return {
         title: "Endpoint not found",
-        guidance: "We couldn't find that endpoint id — it may have been removed. Register it again.",
+        guidance: "We couldn't find that paid link name. It may have been removed. Register it again.",
         detail: "not_found",
       };
     case "server_error":

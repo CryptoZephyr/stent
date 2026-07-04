@@ -6,16 +6,12 @@ import { useEffect, useState } from "react";
 import { PROXY_URL } from "@/lib/config";
 
 const LINKS = [
-  { href: "/", label: "Platform" },
-  { href: "/marketplace", label: "Marketplace" },
-  { href: "/console", label: "Runs" },
-  { href: "/live", label: "Payments" },
-  { href: "/agents", label: "Agents" },
+  { href: "/publish", label: "Publish API" },
+  { href: "/marketplace", label: "Browse APIs" },
   { href: "/docs", label: "Docs" },
-  { href: "/publish", label: "Publish" },
 ];
 
-/** Global top navigation — one consistent chrome across every route. */
+/** Global top navigation for the V2 product spine. */
 export function Nav() {
   const path = usePathname();
   const isActive = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
@@ -58,16 +54,10 @@ export function Nav() {
         </div>
 
         <div className="nav-right">
-          <span role="status" className="nav-status" title={status === "operational" ? "All systems operational" : status === "degraded" ? "Proxy unreachable" : "Checking…"}>
+          <span role="status" className="nav-status" title={status === "operational" ? "All systems operational" : status === "degraded" ? "Proxy unreachable" : "Checking..."}>
             <span className={`dot${status === "degraded" ? " dot-warn" : ""}`} />
-            {status === "checking" ? "checking…" : status}
+            {status === "checking" ? "checking..." : status}
           </span>
-          <Link href="/agents" className={`nav-signin${isActive("/agents") ? " active" : ""}`}>
-            My agent
-          </Link>
-          <Link href="/publish" className="nav-cta">
-            Publish API
-          </Link>
         </div>
       </div>
     </nav>
