@@ -8,6 +8,8 @@ import { PROXY_URL } from "@/lib/config";
 const LINKS = [
   { href: "/publish", label: "Publish API" },
   { href: "/marketplace", label: "Browse APIs" },
+  { href: "/console", label: "Runs" },
+  { href: "/live", label: "Payments" },
   { href: "/docs", label: "Docs" },
 ];
 

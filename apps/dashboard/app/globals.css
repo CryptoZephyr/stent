@@ -400,7 +400,9 @@ summary:focus-visible {
 .market-page,
 .endpoint-page,
 .docs-page,
-.utility-page {
+.utility-page,
+.economy-page,
+.console-page {
   max-width: var(--container);
   margin: 0 auto;
   padding: 72px 24px 96px;
@@ -825,6 +827,12 @@ summary:focus-visible {
   border-color: rgba(240, 120, 120, 0.28);
   color: #ffc5c5;
   background: var(--danger-bg);
+}
+
+.notice.step {
+  color: var(--text-2);
+  background: var(--bg-soft);
+  border-color: var(--line);
 }
 
 .notice p {
@@ -1302,11 +1310,7 @@ summary:focus-visible {
   margin-bottom: 16px;
 }
 
-/* Compatibility for skeleton exports that are no longer primary screens. */
-.eco-tile,
-.eco-panel,
-.con-side,
-.con-main,
+/* Skeleton-only compatibility surface (still used by /agents' AgentPanel). */
 .fleet-stat {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -1314,21 +1318,856 @@ summary:focus-visible {
   padding: 14px;
 }
 
-.eco-tiles,
-.eco-cols,
-.con-cols,
 .fleet-stats {
   display: grid;
   gap: 12px;
 }
 
-.eco-tiles {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+/* ── /live — Machine Economy ─────────────────────────────────────────────
+   Stats tiles, live activity feed, leaderboards. Tokens follow the shared
+   V2 system (--bg-soft, --surface, --accent, --success, --line) rather than
+   the pre-redesign palette; layout/behavior match the original screen. */
+.economy-page .page-hero {
+  padding-bottom: 30px;
 }
 
-.eco-cols,
+.eco-stats-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0 0 14px;
+}
+
+.eco-stats-head h2 {
+  font-size: 20px;
+}
+
+.eco-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  color: var(--success);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.eco-live .dot {
+  background: var(--success);
+}
+
+.eco-live.off {
+  color: var(--warning);
+}
+
+.eco-live.off .dot {
+  background: var(--warning);
+  animation: none;
+}
+
+.eco-unavailable {
+  margin: 0 0 14px;
+}
+
+.eco-tiles {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.eco-tile {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(16, 22, 26, 0.92);
+  padding: 16px 16px 14px;
+}
+
+.eco-tile-v {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 26px;
+  letter-spacing: -0.01em;
+  line-height: 1.05;
+}
+
+.eco-tile-v.money {
+  color: var(--success);
+}
+
+.eco-tile-k {
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.eco-tile-all {
+  margin-top: 9px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.eco-cols {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.eco-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(16, 22, 26, 0.92);
+  padding: 18px 18px 16px;
+}
+
+.eco-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 12px;
+}
+
+.eco-panel-head h3 {
+  margin: 0;
+}
+
+.eco-empty {
+  padding: 16px 4px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.eco-empty.sm {
+  padding: 4px;
+}
+
+.eco-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.eco-feed-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  font-size: 13px;
+  transition: border-color 150ms ease;
+}
+
+.eco-feed-row:hover {
+  border-color: var(--line-strong);
+}
+
+.eco-feed-icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(83, 209, 132, 0.14);
+  color: var(--success);
+  font-size: 13px;
+}
+
+.eco-feed-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.eco-feed-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.eco-feed-sub {
+  margin-top: 2px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.eco-agent {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eco-arrow {
+  flex: none;
+  color: var(--text-3);
+}
+
+.eco-ep {
+  overflow: hidden;
+  color: var(--accent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eco-amt {
+  white-space: nowrap;
+  color: var(--success);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.eco-board {
+  margin-top: 16px;
+}
+
+.eco-board:first-of-type {
+  margin-top: 0;
+}
+
+.eco-board h4 {
+  margin: 0 0 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.eco-rank {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.eco-rank li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 13px;
+}
+
+.eco-rank-no {
+  width: 16px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.eco-rank-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eco-rank-val {
+  white-space: nowrap;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* ── /console — Agent Console ────────────────────────────────────────────
+   Run list rail + timeline of narrative/call blocks. Same V2 token set. */
 .con-cols {
-  grid-template-columns: 280px minmax(0, 1fr);
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.con-side {
+  position: sticky;
+  top: 92px;
+}
+
+.con-runlist {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(16, 22, 26, 0.92);
+  padding: 14px 12px;
+}
+
+.con-runlist-head {
+  padding: 2px 6px 10px;
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.con-runlist ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.con-runitem {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms ease, box-shadow 150ms ease;
+}
+
+.con-runitem:hover {
+  background: var(--bg-soft);
+}
+
+.con-runitem:active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.con-runitem.active {
+  background: rgba(50, 215, 199, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(50, 215, 199, 0.3);
+}
+
+.con-runitem-goal {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+.con-runitem-time {
+  white-space: nowrap;
+  color: var(--text-3);
+  font-size: 10.5px;
+}
+
+.con-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.con-dot-running {
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success);
+}
+
+.con-dot-complete {
+  background: var(--accent);
+}
+
+.con-dot-failed {
+  background: var(--danger);
+}
+
+.con-main {
+  min-width: 0;
+}
+
+.con-runhead {
+  margin-bottom: 18px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(16, 22, 26, 0.92);
+}
+
+.con-runhead-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.con-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.con-status .dot {
+  width: 7px;
+  height: 7px;
+}
+
+.con-status-running {
+  color: var(--success);
+  background: rgba(83, 209, 132, 0.1);
+  border: 1px solid rgba(83, 209, 132, 0.24);
+}
+
+.con-status-running .dot {
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success);
+  animation: glow 1.6s infinite;
+}
+
+.con-status-complete {
+  color: var(--accent);
+  background: rgba(50, 215, 199, 0.1);
+  border: 1px solid rgba(50, 215, 199, 0.24);
+}
+
+.con-status-complete .dot {
+  background: var(--accent);
+}
+
+.con-status-failed {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border: 1px solid rgba(240, 120, 120, 0.24);
+}
+
+.con-status-failed .dot {
+  background: var(--danger);
+}
+
+@keyframes glow {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.con-runtime {
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.con-goal-label {
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.con-goal {
+  margin: 5px 0 14px;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.con-runmeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.con-timeline {
+  position: relative;
+  padding-left: 18px;
+}
+
+.con-timeline::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: 1px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+
+.con-narr,
+.con-call {
+  position: relative;
+  margin-bottom: 14px;
+}
+
+.con-narr::before,
+.con-call::before {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: -18px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--bg-soft);
+  border: 2px solid var(--line-strong);
+}
+
+.con-narr-reasoning::before {
+  border-color: var(--text-2);
+}
+
+.con-call-paid::before {
+  border-color: var(--success);
+  background: var(--success);
+}
+
+.con-call-selected::before {
+  border-color: var(--accent);
+}
+
+.con-call-blocked::before,
+.con-call-error::before,
+.con-narr-error::before {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.con-narr-complete::before {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.con-narr {
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-soft);
+}
+
+.con-narr-complete {
+  background: rgba(50, 215, 199, 0.07);
+  border-color: rgba(50, 215, 199, 0.24);
+}
+
+.con-narr-error {
+  background: var(--danger-bg);
+  border-color: rgba(240, 120, 120, 0.24);
+}
+
+.con-narr-label {
+  margin-bottom: 4px;
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.con-narr-error .con-narr-label {
+  color: var(--danger);
+}
+
+.con-narr-text {
+  margin: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.con-call {
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(16, 22, 26, 0.92);
+}
+
+.con-call-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.con-call-ep {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.con-pill {
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.con-pill-paid {
+  color: var(--success);
+  background: rgba(83, 209, 132, 0.14);
+}
+
+.con-pill-selected {
+  color: var(--accent);
+  background: rgba(50, 215, 199, 0.1);
+}
+
+.con-pill-blocked,
+.con-pill-error {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.con-life {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.con-life li {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.con-life-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.con-life-sub {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.con-resp {
+  flex-basis: 100%;
+  margin-top: 2px;
+}
+
+.con-resp summary {
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.con-resp pre {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, #10161c, #0b0f12);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.con-empty {
+  padding: 24px 4px;
+  color: var(--text-2);
+  font-size: 13.5px;
+}
+
+.con-empty.sm {
+  padding: 8px 6px;
+  font-size: 12.5px;
+}
+
+.con-context {
+  margin: 0 0 16px;
+}
+
+@media (max-width: 760px) {
+  .eco-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .eco-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .con-cols {
+    grid-template-columns: 1fr;
+  }
+
+  .con-side {
+    position: static;
+  }
+
+  .con-runlist ul {
+    display: flex;
+    gap: 8px;
+    padding-bottom: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .con-runlist ul::-webkit-scrollbar {
+    display: none;
+  }
+
+  .con-runlist li {
+    min-width: 220px;
+  }
+}
+
+@media (max-width: 520px) {
+  .eco-tiles {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Motion polish: /live payment feed + /console agent timeline ───────────
+   Entrances animate transform/opacity only (no height/margin), so settled
+   rows never shift. Everything here is additionally covered by the global
+   prefers-reduced-motion block below, which forces near-zero durations.
+
+   .con-life-dot's base geometry (size/shape/idle color) is set here; the
+   "done"/"bad" state colors and the transition itself are layered on below
+   so the fill/scale change has something to animate between. */
+.con-life-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  flex-shrink: 0;
+}
+
+.eco-live .dot {
+  animation: eco-live-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes eco-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.82);
+  }
+}
+
+.eco-feed-row.fresh {
+  animation:
+    eco-row-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both,
+    eco-row-highlight 1.8s ease-out both;
+}
+
+@keyframes eco-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes eco-row-highlight {
+  0% {
+    background: rgba(50, 215, 199, 0.16);
+    box-shadow: inset 0 0 0 1px rgba(50, 215, 199, 0.35);
+  }
+  100% {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+
+.con-enter {
+  animation: con-block-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--con-stagger, 0) * 70ms);
+}
+
+@keyframes con-block-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.con-life li {
+  animation: con-step-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.con-life-dot {
+  transition:
+    transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    background-color 180ms ease,
+    box-shadow 180ms ease;
+  transform: scale(0.72);
+}
+
+.con-life li.done .con-life-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(50, 215, 199, 0.18);
+  transform: scale(1);
+}
+
+.con-life li.bad .con-life-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px rgba(240, 120, 120, 0.18);
+  transform: scale(1);
+}
+
+@keyframes con-step-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.con-empty-pulse {
+  animation: con-empty-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes con-empty-breathe {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 @keyframes spin {

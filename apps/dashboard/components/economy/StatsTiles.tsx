@@ -1,4 +1,5 @@
 import type { EconomyStats } from "@/lib/economy";
+import { useCountUp } from "@/lib/useCountUp";
 import { formatUsdc, formatCount, timeAgo } from "./format";
 
 const TILES: { key: keyof EconomyStats; label: string; money?: boolean }[] = [
@@ -10,6 +11,13 @@ const TILES: { key: keyof EconomyStats; label: string; money?: boolean }[] = [
 ];
 
 const fmt = (v: number, money?: boolean) => (money ? formatUsdc(v) : formatCount(v));
+
+/** A single tile value that counts up toward `value` instead of jumping. */
+function TileValue({ value, money, unavailable }: { value: number; money?: boolean; unavailable: boolean }) {
+  const animated = useCountUp(unavailable ? 0 : value);
+  if (unavailable) return <>—</>;
+  return <>{fmt(animated, money)}</>;
+}
 
 export function StatsTiles({
   all,
@@ -49,11 +57,17 @@ export function StatsTiles({
         {TILES.map((t) => (
           <div className="eco-tile" key={t.key}>
             <div className={`eco-tile-v${t.money ? " money" : ""}`}>
-              {unavailable ? "—" : fmt(today[t.key], t.money)}
+              <TileValue value={today[t.key]} money={t.money} unavailable={unavailable} />
             </div>
             <div className="eco-tile-k">{t.label}</div>
             <div className="eco-tile-all">
-              {unavailable ? "Live data unavailable" : `${fmt(all[t.key], t.money)} all-time`}
+              {unavailable ? (
+                "Live data unavailable"
+              ) : (
+                <>
+                  <TileValue value={all[t.key]} money={t.money} unavailable={unavailable} /> all-time
+                </>
+              )}
             </div>
           </div>
         ))}

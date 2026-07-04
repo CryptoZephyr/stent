@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { ActivityItem } from "@/lib/economy";
 import { formatUsdc, timeAgo } from "./format";
 
@@ -14,6 +15,22 @@ export function ActivityFeed({
   lastActivityAt?: string | null;
   unavailable?: boolean;
 }) {
+  // A row plays its entrance/highlight animation exactly once, the first time
+  // its id is rendered as `flashId` — not on every re-render the parent causes
+  // (e.g. a later payment arriving), even if the parent never clears `flashId`.
+  // The initial batch of items on mount is not "new", so it's seeded as
+  // already-played rather than flashed.
+  const playedRef = useRef<Set<string> | null>(null);
+  if (playedRef.current === null) {
+    playedRef.current = new Set(items.map((it) => it.id));
+  }
+  const played = playedRef.current;
+  const isFresh = (id: string) => {
+    if (flashId !== id || played.has(id)) return false;
+    played.add(id);
+    return true;
+  };
+
   return (
     <section className="eco-panel">
       <div className="eco-panel-head">
@@ -40,7 +57,7 @@ export function ActivityFeed({
       ) : (
         <ul className="eco-feed">
           {items.map((it) => (
-            <li key={it.id} className={`eco-feed-row${flashId === it.id ? " fresh" : ""}`}>
+            <li key={it.id} className={`eco-feed-row${isFresh(it.id) ? " fresh" : ""}`}>
               <span className="eco-feed-icon" aria-hidden>
                 ◈
               </span>

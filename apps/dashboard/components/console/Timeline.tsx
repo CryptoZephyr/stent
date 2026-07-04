@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { ConsoleBlock, CallBlock } from "@/lib/console";
 import { formatUsdc } from "../economy/format";
 
@@ -12,10 +13,18 @@ function callState(b: CallBlock): "selected" | "paid" | "blocked" | "error" {
   return "selected";
 }
 
-function CallCard({ block }: { block: CallBlock }) {
+function CallCard({
+  block,
+  enterClass = "",
+  style,
+}: {
+  block: CallBlock;
+  enterClass?: string;
+  style?: React.CSSProperties;
+}) {
   const state = callState(block);
   return (
-    <div className={`con-call con-call-${state}`}>
+    <div className={`con-call con-call-${state}${enterClass}`} style={style}>
       <div className="con-call-head">
         <span className="con-call-ep mono">{block.endpointSlug}</span>
         <span className={`con-pill con-pill-${state}`}>{state}</span>
@@ -67,22 +76,42 @@ const NARRATIVE_LABEL: Record<string, string> = {
   error: "Run failed",
 };
 
+/** How many just-arrived blocks still get a staggered entrance delay at once. */
+const STAGGER_WINDOW = 6;
+
 export function Timeline({ blocks }: { blocks: ConsoleBlock[] }) {
+  // Blocks stream in over time (Realtime) but can also arrive as a full batch
+  // on initial load. Either way, only blocks new to this render pass get an
+  // entrance animation + stagger delay; blocks already on screen (identified
+  // by their stable `seq`) must not replay it as later blocks are appended.
+  const enteredRef = useRef<Set<number>>(new Set());
+  const entered = enteredRef.current;
+  const freshSeqs: number[] = [];
+  for (const b of blocks) {
+    if (!entered.has(b.seq)) freshSeqs.push(b.seq);
+  }
+  const staggerIndex = new Map<number, number>();
+  freshSeqs.slice(-STAGGER_WINDOW).forEach((seq, idx) => staggerIndex.set(seq, idx));
+  for (const seq of freshSeqs) entered.add(seq);
+
   if (blocks.length === 0) {
-    return <p className="con-empty">No steps yet — waiting for the agent to act…</p>;
+    return <p className="con-empty con-empty-pulse">No steps yet — waiting for the agent to act…</p>;
   }
   return (
     <div className="con-timeline">
-      {blocks.map((b, i) =>
-        b.type === "narrative" ? (
-          <div key={i} className={`con-narr con-narr-${b.kind}`}>
+      {blocks.map((b, i) => {
+        const stagger = staggerIndex.get(b.seq);
+        const style = stagger != null ? ({ "--con-stagger": stagger } as React.CSSProperties) : undefined;
+        const enterClass = stagger != null ? " con-enter" : "";
+        return b.type === "narrative" ? (
+          <div key={i} className={`con-narr con-narr-${b.kind}${enterClass}`} style={style}>
             <div className="con-narr-label">{NARRATIVE_LABEL[b.kind]}</div>
             {b.detail && <p className="con-narr-text">{b.detail}</p>}
           </div>
         ) : (
-          <CallCard key={i} block={b} />
-        )
-      )}
+          <CallCard key={i} block={b} enterClass={enterClass} style={style} />
+        );
+      })}
     </div>
   );
 }
