@@ -1,15 +1,43 @@
 {
-  "name": "@stent/sdk",
+  "name": "stent-sdk",
   "version": "0.1.0",
   "description": "StentClient — drop-in agent SDK for paying x402 endpoints with Circle Gateway batched USDC on Arc.",
   "license": "MIT",
   "type": "commonjs",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CryptoZephyr/stent.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://github.com/CryptoZephyr/stent#readme",
+  "author": "CryptoZephyr",
+  "keywords": [
+    "x402",
+    "usdc",
+    "circle",
+    "gateway",
+    "arc",
+    "micropayments",
+    "nanopayments",
+    "ai-agents",
+    "api-monetization"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsc -p tsconfig.json --watch"
+    "dev": "tsc -p tsconfig.json --watch",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@circle-fin/x402-batching": "^3.2.0",
