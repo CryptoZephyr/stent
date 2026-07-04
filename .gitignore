@@ -62,3 +62,5 @@ system_design.md
 scripts/
 supabase/seed.sql
 apps/demo-agent/
+
+.vercel
