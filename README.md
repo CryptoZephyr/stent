@@ -19,7 +19,7 @@ Built for the Lepton Agents Hackathon, Canteen x Circle x Arc, June 2026.
   payment logging.
 - `apps/dashboard` - Next.js dashboard for publishing APIs, browsing the
   marketplace, watching payment activity, and naming agent wallets.
-- `packages/sdk` - `@stent/sdk`, a TypeScript client around Circle Gateway's
+- `packages/sdk` - `stent-sdk`, a TypeScript client around Circle Gateway's
   x402 client with a spend cap and spend accounting.
 - `apps/demo-origin` - Payment-unaware upstream API used for local and deployed
   demos.
@@ -129,11 +129,15 @@ the origin URL or verification secret.
 
 ## SDK
 
-The SDK lives in `packages/sdk` as workspace package `@stent/sdk`. It is not
-published to npm; use it today by copying `packages/sdk` into your project.
+The SDK lives in `packages/sdk` as workspace package `stent-sdk`. It is
+published to npm:
+
+```bash
+npm install stent-sdk
+```
 
 ```ts
-import { StentClient } from "@stent/sdk";
+import { StentClient } from "stent-sdk";
 
 const client = new StentClient({
   privateKey: process.env.BUYER_PRIVATE_KEY as `0x${string}`,

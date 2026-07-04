@@ -5,8 +5,8 @@ export function endpointUrl(slug: string): string {
 }
 
 export function sdkSnippet(slug: string): string {
-  return `// @stent/sdk is not on npm yet. Copy packages/sdk from github.com/CryptoZephyr/stent.
-import { StentClient } from "@stent/sdk";
+  return `// npm install stent-sdk
+import { StentClient } from "stent-sdk";
 
 const client = new StentClient({
   privateKey: process.env.BUYER_PRIVATE_KEY,

@@ -11,7 +11,8 @@ const VERIFY_HEADER_EXAMPLE = `app.get("/data", (_req, res) => {
   res.json({ ok: true });
 });`;
 
-const SDK_EXAMPLE = `import { StentClient } from "@stent/sdk";
+const SDK_EXAMPLE = `// npm install stent-sdk
+import { StentClient } from "stent-sdk";
 
 const client = new StentClient({
   privateKey: process.env.BUYER_PRIVATE_KEY,
