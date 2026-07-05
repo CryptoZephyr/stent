@@ -183,6 +183,17 @@ export function createRegistrationRouter(): Router {
   });
 
   // Register a new (unverified) endpoint.
+  //
+  // Re-registration of an UNVERIFIED slug: an unverified row is unauthenticated
+  // by nature — nobody has proven ownership of it yet, so it carries no serving
+  // or payment capability. If the original registrant loses their verification
+  // token (cleared storage, different browser), the slug would otherwise be a
+  // permanent dead end: it can't be verified, deleted, or reused. We fix that by
+  // letting a fresh POST for the same slug REPLACE an unverified row in place —
+  // revalidated exactly like a new registration, with a freshly issued token
+  // (invalidating any stale pending token) — while `verified` stays false. This
+  // can NEVER touch a row that is already `verified = true`; that path still
+  // 409s untouched, so a live, ownership-proven endpoint can't be hijacked.
   router.post("/endpoints", async (req, res) => {
     const ip = req.ip ?? "unknown";
     if (!rateLimiter.hit(`register:${ip}`, REGISTER_RPM).allowed) {
@@ -198,20 +209,41 @@ export function createRegistrationRouter(): Router {
     const { error } = await supabase
       .from("endpoints")
       .insert({ ...v.value, verification_token: token, verified: false, active: true });
+    let reissued = false;
     if (error) {
-      if (/duplicate key|unique/i.test(error.message)) {
+      if (!/duplicate key|unique/i.test(error.message)) {
+        console.error("[register] insert failed:", error.message);
+        res.status(500).json({ error: "insert_failed" });
+        return;
+      }
+      // Slug already exists. Race-safe conditional replace: only rows that are
+      // STILL unverified at update time qualify — `.eq("verified", false)` is
+      // evaluated by Postgres atomically with the update, so a row that was
+      // verified between our insert attempt and now is never touched. Zero rows
+      // returned means the row is verified (or was deleted concurrently) → 409.
+      const { data: replaced, error: updErr } = await supabase
+        .from("endpoints")
+        .update({ ...v.value, verification_token: token, verified: false, active: true })
+        .eq("slug", v.value.slug)
+        .eq("verified", false)
+        .select();
+      if (updErr) {
+        console.error("[register] reissue update failed:", updErr.message);
+        res.status(500).json({ error: "insert_failed" });
+        return;
+      }
+      if (!replaced || replaced.length === 0) {
         res.status(409).json({ error: "slug_taken" });
         return;
       }
-      console.error("[register] insert failed:", error.message);
-      res.status(500).json({ error: "insert_failed" });
-      return;
+      reissued = true;
     }
     const origin = new URL(v.value.target_url).origin;
     res.status(201).json({
       slug: v.value.slug,
       verified: false,
       verification_token: token,
+      reissued,
       next_steps: {
         "1": `Serve this exact token as plain text at ${origin}/stent-verification.txt`,
         "2": `POST /_api/endpoints/${v.value.slug}/verify to verify ownership and go live`,

@@ -31,6 +31,22 @@ const db = vi.hoisted(() => {
         const filters: Record<string, unknown> = {};
         let operation: "select" | "update" | null = null;
         let updatePayload: Partial<EndpointRow> = {};
+
+        // Applies the pending update to every row matching the accumulated
+        // filters and returns the affected rows. Idempotent to call once;
+        // both the implicit await path (no .select()) and the explicit
+        // .select() path route through this.
+        const applyUpdate = () => {
+          const affected: EndpointRow[] = [];
+          for (const row of rows.values()) {
+            if (matches(row, filters)) {
+              Object.assign(row, updatePayload);
+              affected.push(row);
+            }
+          }
+          return affected;
+        };
+
         const builder = {
           insert: async (row: EndpointRow) => {
             if (rows.has(row.slug)) return { error: { message: "duplicate key value violates unique constraint" } };
@@ -38,6 +54,12 @@ const db = vi.hoisted(() => {
             return { error: null };
           },
           select: () => {
+            if (operation === "update") {
+              // Terminal call for update().eq()...select() chains: apply now
+              // and resolve with the affected rows (Supabase's own shape).
+              const affected = applyUpdate();
+              return Promise.resolve({ data: affected, error: null });
+            }
             operation = "select";
             return builder;
           },
@@ -48,12 +70,6 @@ const db = vi.hoisted(() => {
           },
           eq: (column: string, value: unknown) => {
             filters[column] = value;
-            if (operation === "update") {
-              for (const row of rows.values()) {
-                if (matches(row, filters)) Object.assign(row, updatePayload);
-              }
-              return Promise.resolve({ error: null });
-            }
             return builder;
           },
           maybeSingle: async () => ({
@@ -64,6 +80,12 @@ const db = vi.hoisted(() => {
             data: Array.from(rows.values()).filter((row) => matches(row, filters)),
             error: null,
           }),
+          // Makes `await builder` work for call sites that end the chain on
+          // .eq() directly (no .select()), e.g. verify/patch updates.
+          then: (resolve: (v: { error: null }) => void) => {
+            if (operation === "update") applyUpdate();
+            resolve({ error: null });
+          },
         };
         return builder;
       },
@@ -146,6 +168,146 @@ describe("publisher ownership verification flow", () => {
     await expect(marketplaceRes.json()).resolves.toMatchObject({
       endpoints: [expect.objectContaining({ slug: "flow-test", verified: true, active: true })],
     });
+  });
+
+  it("reissues an UNVERIFIED slug on re-registration (orphaned-token recovery)", async () => {
+    const app = express();
+    app.use("/_api", createRegistrationRouter());
+    api = createServer(app);
+    const apiUrl = await listen(api);
+
+    const original = {
+      slug: "orphan-test",
+      target_url: "http://localhost:8787/arc-stats",
+      price_usdc: "0.001",
+      publisher_wallet: "0x38D5f89A6f91139d5BeBCEf01E1aaaaAca90D0f1",
+      description: "Original registration",
+    };
+    const firstRes = await fetch(`${apiUrl}/_api/endpoints`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(original),
+    });
+    expect(firstRes.status).toBe(201);
+    const first = (await firstRes.json()) as { verification_token: string; reissued: boolean };
+    expect(first.reissued).toBe(false);
+
+    // Simulate the original registrant losing their token: a different wallet
+    // (or the same one, doesn't matter — nobody has proven ownership yet)
+    // re-registers the same slug with different details.
+    const replacement = {
+      slug: "orphan-test",
+      target_url: "http://localhost:8787/usdc-volume",
+      price_usdc: "0.0007",
+      publisher_wallet: "0x000000000000000000000000000000000000dEaD",
+      description: "Replacement registration",
+    };
+    const secondRes = await fetch(`${apiUrl}/_api/endpoints`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(replacement),
+    });
+    expect(secondRes.status).toBe(201);
+    const second = (await secondRes.json()) as { verification_token: string; reissued: boolean; verified: boolean };
+    expect(second.reissued).toBe(true);
+    expect(second.verified).toBe(false);
+    expect(second.verification_token).toMatch(/^stent-verify-[a-f0-9]{32}$/);
+    expect(second.verification_token).not.toBe(first.verification_token);
+
+    const stored = db.rows.get("orphan-test");
+    expect(stored).toMatchObject({
+      target_url: replacement.target_url,
+      price_usdc: replacement.price_usdc,
+      publisher_wallet: replacement.publisher_wallet,
+      description: replacement.description,
+      verified: false,
+      active: true,
+      verification_token: second.verification_token,
+    });
+
+    // The old token no longer matches — any in-flight verify using it is
+    // honestly rejected as a mismatch, not silently accepted.
+    expect(stored?.verification_token).not.toBe(first.verification_token);
+  });
+
+  it("refuses to reissue a VERIFIED slug (still 409, row untouched)", async () => {
+    const app = express();
+    app.use("/_api", createRegistrationRouter());
+    api = createServer(app);
+    const apiUrl = await listen(api);
+
+    db.rows.set("locked-test", {
+      slug: "locked-test",
+      target_url: "https://api.example.com/data",
+      price_usdc: "0.002",
+      publisher_wallet: "0x38D5f89A6f91139d5BeBCEf01E1aaaaAca90D0f1",
+      description: "Live endpoint",
+      rate_limit_rpm: 100,
+      agent_limit_rpm: 10,
+      verification_token: "stent-verify-original-token",
+      verified: true,
+      active: true,
+      created_at: "2026-07-02T00:00:00.000Z",
+      sample_response: null,
+    });
+
+    const res = await fetch(`${apiUrl}/_api/endpoints`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        slug: "locked-test",
+        target_url: "https://attacker.example.com/hijack",
+        price_usdc: "0.5",
+        publisher_wallet: "0x000000000000000000000000000000000000dEaD",
+        description: "Attempted hijack",
+      }),
+    });
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({ error: "slug_taken" });
+
+    const stored = db.rows.get("locked-test");
+    expect(stored).toMatchObject({
+      target_url: "https://api.example.com/data",
+      price_usdc: "0.002",
+      publisher_wallet: "0x38D5f89A6f91139d5BeBCEf01E1aaaaAca90D0f1",
+      verified: true,
+      verification_token: "stent-verify-original-token",
+    });
+  });
+
+  it("validates re-registration input the same as fresh registration (TLS rule still applies)", async () => {
+    const app = express();
+    app.use("/_api", createRegistrationRouter());
+    api = createServer(app);
+    const apiUrl = await listen(api);
+
+    const original = {
+      slug: "revalidate-test",
+      target_url: "http://localhost:8787/arc-stats",
+      price_usdc: "0.001",
+      publisher_wallet: "0x38D5f89A6f91139d5BeBCEf01E1aaaaAca90D0f1",
+      description: "Original",
+    };
+    const firstRes = await fetch(`${apiUrl}/_api/endpoints`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(original),
+    });
+    expect(firstRes.status).toBe(201);
+
+    // Non-loopback http:// must still be rejected on re-registration, exactly
+    // like fresh registration (Security Rule #5, TLS-only).
+    const badRes = await fetch(`${apiUrl}/_api/endpoints`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...original, target_url: "http://api.example.com/insecure" }),
+    });
+    expect(badRes.status).toBe(400);
+    await expect(badRes.json()).resolves.toMatchObject({ error: "invalid_registration" });
+
+    // Row must be untouched by the rejected attempt.
+    const stored = db.rows.get("revalidate-test");
+    expect(stored).toMatchObject({ target_url: original.target_url, verified: false });
   });
 });
 
