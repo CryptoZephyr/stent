@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { NETWORK_LABEL, PROXY_URL } from "@/lib/config";
+import { Reveal } from "@/components/landing/Reveal";
 
 const PATH = [
   {
@@ -23,7 +24,7 @@ const PATH = [
 export default function Landing() {
   return (
     <main className="home">
-      <section className="home-hero" aria-labelledby="home-title">
+      <section className="home-hero home-hero-glow" aria-labelledby="home-title">
         <div className="home-hero-copy">
           <p className="page-kicker">Paid API links for existing endpoints</p>
           <h1 id="home-title">Sell access to an API you already run.</h1>
@@ -41,7 +42,7 @@ export default function Landing() {
           </div>
         </div>
 
-        <aside className="home-terminal" aria-label="What Stent creates">
+        <aside className="home-terminal home-terminal-live" aria-label="What Stent creates">
           <div className="terminal-head">
             <span>First paid API</span>
             <span className="badge live">
@@ -49,7 +50,7 @@ export default function Landing() {
               Ready after verify
             </span>
           </div>
-          <dl className="terminal-list">
+          <dl className="terminal-list terminal-list-pulse">
             <div>
               <dt>Your API</dt>
               <dd className="mono">https://api.yoursite.com/data</dd>
@@ -76,27 +77,27 @@ export default function Landing() {
           <h2 id="fit-title">Use Stent when the API already exists and the missing piece is payment.</h2>
         </div>
         <div className="fit-grid">
-          <article className="fit-panel fit-primary">
+          <Reveal as="article" index={0} className="fit-panel fit-primary">
             <h3>API owners</h3>
             <p>
               You have a working endpoint and want to charge per request without adding accounts,
               subscriptions, checkout, or billing code.
             </p>
-          </article>
-          <article className="fit-panel">
+          </Reveal>
+          <Reveal as="article" index={1} className="fit-panel">
             <h3>Agent and app builders</h3>
             <p>
               You need a paid API URL that an agent loop or app can call with a spend cap and a
               predictable request path.
             </p>
-          </article>
-          <article className="fit-panel">
+          </Reveal>
+          <Reveal as="article" index={2} className="fit-panel">
             <h3>Not a fit</h3>
             <p>
               Stent does not host your API, change your payment model, or introduce smart
               contracts. It is the paid access layer in front of what you already run.
             </p>
-          </article>
+          </Reveal>
         </div>
       </section>
 
@@ -111,18 +112,18 @@ export default function Landing() {
         </div>
         <div className="path-list">
           {PATH.map((step, index) => (
-            <article className="path-row" key={step.title}>
+            <Reveal as="article" index={index} className="path-row" key={step.title}>
               <span className="path-index mono">{String(index + 1).padStart(2, "0")}</span>
               <div>
                 <h3>{step.title}</h3>
                 <p>{step.text}</p>
               </div>
-            </article>
+            </Reveal>
           ))}
         </div>
       </section>
 
-      <section className="home-commit" aria-labelledby="commit-title">
+      <Reveal as="section" className="home-commit" aria-labelledby="commit-title">
         <div>
           <p className="page-kicker">What stays true</p>
           <h2 id="commit-title">Your server stays unchanged.</h2>
@@ -134,7 +135,7 @@ export default function Landing() {
         <Link href="/publish" className="btn btn-ghost btn-lg">
           Start with one endpoint
         </Link>
-      </section>
+      </Reveal>
     </main>
   );
 }

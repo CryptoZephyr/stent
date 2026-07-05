@@ -22,6 +22,17 @@
   --radius-lg: 14px;
   --container: 1160px;
   --z-nav: 20;
+
+  /* Motion system — shared rhythm across the app (see the /live + /console
+     "Motion polish" block below for the pass this extends). Two bands:
+     fast, discrete state changes (hover/focus/press) and slow, one-shot
+     reveals (entrances, ambient loops). Easing is exponential ease-out
+     throughout — quick start, gentle settle, never a bounce. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 140ms;   /* hover/focus micro-interactions */
+  --duration-med: 220ms;    /* small state transitions (lift, border-glow) */
+  --duration-reveal: 380ms; /* one-shot section/row entrances */
+  --stagger-unit: 70ms;     /* per-item delay inside a staggered group */
 }
 
 * {
@@ -2182,6 +2193,238 @@ summary:focus-visible {
   }
 }
 
+/* ── Landing motion: scroll reveals + hero ambience ─────────────────────────
+   Extends the "Motion polish" system above with the landing page's specific
+   hooks (Reveal.tsx, page.tsx). Same two bands: one-shot entrances driven by
+   IntersectionObserver, and slow ambient ("felt, not seen") loops on the
+   hero. Transform/opacity only, so layout never shifts. */
+
+/* .reveal-pre / .reveal-in — one-shot rise+fade entrance for below-the-fold
+   sections (fit panels, path rows, commit block). Reveal.tsx always renders
+   `reveal-pre` first and swaps to `reveal-in` once IntersectionObserver
+   fires; it already falls back to `reveal-in` immediately when the observer
+   API is missing. The remaining gap is belt-and-suspenders: if some other
+   non-JS/no-observer path ever left an element stuck on `reveal-pre`, a
+   `reveal-noscript-show` animation guarantees it fades in on its own after
+   ~1.2s so content can never stay invisible forever. */
+.reveal-pre {
+  opacity: 0;
+  transform: translateY(14px);
+  animation: reveal-noscript-show 0.01ms 1.2s both;
+}
+
+.reveal-in {
+  animation: reveal-in var(--duration-reveal) var(--ease-out) both;
+  animation-delay: calc(var(--reveal-stagger, 0) * var(--stagger-unit));
+}
+
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes reveal-noscript-show {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* .home-hero-glow — one very slow ambient radial glow drifting behind the
+   hero. Large, heavily blurred, very low alpha: it should read as depth,
+   not as a visible moving shape. */
+.home-hero-glow {
+  position: relative;
+  isolation: isolate;
+}
+
+.home-hero-glow::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -12% -8%;
+  background: radial-gradient(
+    38rem 26rem at 22% 32%,
+    rgba(50, 215, 199, 0.1),
+    transparent 68%
+  );
+  filter: blur(30px);
+  animation: hero-glow-drift 34s var(--ease-out) infinite alternate;
+  pointer-events: none;
+}
+
+@keyframes hero-glow-drift {
+  0% {
+    transform: translate(-3%, -2%) scale(1);
+    opacity: 0.55;
+  }
+  50% {
+    transform: translate(2%, 3%) scale(1.08);
+    opacity: 0.85;
+  }
+  100% {
+    transform: translate(4%, -3%) scale(1);
+    opacity: 0.6;
+  }
+}
+
+/* .home-terminal-live — barely-perceptible sheen sweep + border breathe on
+   the hero terminal card, so it reads as "live" without competing with the
+   text inside it. Sheen sits in a pseudo-element above the card background
+   but its gradient is low-alpha enough not to touch legibility. */
+.home-terminal-live {
+  position: relative;
+  overflow: hidden;
+  animation: terminal-border-breathe 22s ease-in-out infinite;
+}
+
+.home-terminal-live::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background: linear-gradient(
+    115deg,
+    transparent 40%,
+    rgba(143, 241, 232, 0.05) 50%,
+    transparent 60%
+  );
+  background-size: 260% 260%;
+  background-position: 120% -20%;
+  animation: terminal-sheen-sweep 26s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes terminal-sheen-sweep {
+  0%,
+  6% {
+    background-position: 120% -20%;
+  }
+  40%,
+  100% {
+    background-position: -60% 60%;
+  }
+}
+
+@keyframes terminal-border-breathe {
+  0%,
+  100% {
+    border-color: var(--line);
+  }
+  50% {
+    border-color: rgba(50, 215, 199, 0.22);
+  }
+}
+
+/* .terminal-list-pulse — the on-brand detail: a light pulse travels down the
+   terminal list once every ~9s, top ("Your API") to bottom ("Paid URL"),
+   telling the product story (request in, paid URL out) without a single
+   extra DOM node — a thin gradient bar riding the dl's own height. */
+.terminal-list-pulse {
+  position: relative;
+}
+
+.terminal-list-pulse::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 18%;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(50, 215, 199, 0.16),
+    transparent
+  );
+  opacity: 0;
+  animation: terminal-list-travel 9s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes terminal-list-travel {
+  0% {
+    top: 0%;
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  30% {
+    top: 82%;
+    opacity: 1;
+  }
+  36%,
+  100% {
+    top: 82%;
+    opacity: 0;
+  }
+}
+
+/* Micro-interactions — hover/focus-visible on the landing page's interactive
+   surfaces. Reuses --duration-fast/--duration-med + --ease-out so these feel
+   like the same hand as the rest of the app; only adds what .btn etc. don't
+   already define (color/background hovers stay as-is). */
+.hero-actions .btn {
+  transition:
+    background 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease,
+    transform var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-med) var(--ease-out);
+}
+
+.hero-actions .btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px -12px rgba(50, 215, 199, 0.35);
+}
+
+.hero-actions .btn:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.fit-panel {
+  transition:
+    transform var(--duration-med) var(--ease-out),
+    border-color var(--duration-med) var(--ease-out),
+    background var(--duration-med) var(--ease-out);
+}
+
+.fit-panel:hover {
+  transform: translateY(-3px);
+  border-color: rgba(50, 215, 199, 0.32);
+}
+
+.path-row {
+  transition:
+    background var(--duration-med) var(--ease-out),
+    border-color var(--duration-med) var(--ease-out);
+}
+
+.path-row:hover {
+  background: rgba(50, 215, 199, 0.04);
+  border-top-color: rgba(50, 215, 199, 0.28);
+}
+
+.path-row .path-index {
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.path-row:hover .path-index {
+  color: var(--accent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -2190,6 +2433,35 @@ summary:focus-visible {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.001ms !important;
+  }
+
+  /* Reveals collapse to instantly-visible content; ambient/travel loops are
+     fully disabled rather than just shortened, since "1 iteration at 0.001ms"
+     of an infinite ambient loop would still leave it stuck mid-frame. Hovers
+     keep their color/background changes (handled by the transition-duration
+     override above) but drop transform movement. */
+  .reveal-pre {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+
+  .reveal-in {
+    animation: none;
+  }
+
+  .home-hero-glow::before,
+  .home-terminal-live,
+  .home-terminal-live::after,
+  .terminal-list-pulse::before {
+    animation: none;
+  }
+
+  .hero-actions .btn:hover:not(:disabled),
+  .hero-actions .btn:active:not(:disabled),
+  .fit-panel:hover {
+    transform: none;
+    box-shadow: none;
   }
 }
 
