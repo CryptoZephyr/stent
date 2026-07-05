@@ -10,7 +10,11 @@ import { NETWORK_LABEL, PROXY_URL } from "@/lib/config";
 import { endpointUrl, sdkSnippet, curlSnippet } from "@/lib/snippet";
 import { CodeBlock, InlineCopy, StatusBadge } from "./ui";
 
-const POLL_MS = 3000;
+// Verify polling schedule: 7 checks max per round (immediate + 6 retries),
+// spread over ~60s. Delays are the WAIT before each subsequent check, so the
+// checks land at t = 0s, 5s, 15s, 27s, 39s, 51s, 63s. Two full rounds back to
+// back stay well under the proxy's REGISTER_RPM (20/min) budget.
+const POLL_DELAYS_MS = [5000, 10000, 12000, 12000, 12000, 12000];
 const WINDOW_MS = 60000;
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,39}$/;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -108,7 +112,15 @@ export function ApiStep({
         {errors.url ? (
           <p className="field-error">{errors.url}</p>
         ) : (
-          <p className="hint">Your API keeps returning the same data. Stent adds paid access.</p>
+          <>
+            <p className="hint">Your API keeps returning the same data. Stent adds paid access.</p>
+            <p className="hint">
+              No API yet?{" "}
+              <a className="text-link" href="/docs#sample-origin">
+                See the docs for a 10-line sample origin you can deploy free.
+              </a>
+            </p>
+          </>
         )}
       </div>
 
@@ -383,20 +395,38 @@ export function VerifyStep({
     setPhase("checking");
     setMsg(null);
     setProgress(0);
-    const deadline = Date.now() + WINDOW_MS;
+    const start = Date.now();
 
-    while (!cancelRef.current) {
+    // Immediate check, then retries at increasing intervals (POLL_DELAYS_MS).
+    // At most 1 + POLL_DELAYS_MS.length requests per round, regardless of how
+    // this loop is entered — keeps us well under the proxy's per-IP register
+    // rate limit even across two consecutive rounds.
+    const attempts = POLL_DELAYS_MS.length + 1;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) await sleep(POLL_DELAYS_MS[attempt - 1]);
+      if (cancelRef.current) return;
+
       const result = await verifyEndpoint(reg.slug);
       if (cancelRef.current) return;
+
       if (result.verified) {
         onVerified();
         return;
       }
+
+      if (result.status === 429) {
+        setMsg({
+          title: "Too many verification checks",
+          guidance: "Too many verification checks in the last minute. Wait a moment, then Check again.",
+          detail: "rate_limited",
+        });
+        setProgress(1);
+        setPhase("failed");
+        return;
+      }
+
       setMsg(verifyMessage(result, { fileUrl }));
-      const remaining = deadline - Date.now();
-      setProgress(Math.min(1, 1 - remaining / WINDOW_MS));
-      if (remaining <= POLL_MS) break;
-      await sleep(POLL_MS);
+      setProgress(Math.min(1, (Date.now() - start) / WINDOW_MS));
     }
 
     if (!cancelRef.current) {

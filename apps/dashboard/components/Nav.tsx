@@ -13,6 +13,8 @@ const LINKS = [
   { href: "/docs", label: "Docs" },
 ];
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 /** Global top navigation for the V2 product spine. */
 export function Nav() {
   const path = usePathname();
@@ -21,15 +23,46 @@ export function Nav() {
 
   useEffect(() => {
     let active = true;
-    (async () => {
+    // Aborts any in-flight fetch on unmount/nav so we don't leak requests.
+    const cleanupAbort = new AbortController();
+
+    async function check(timeoutMs: number): Promise<"ok" | "aborted" | "failed"> {
+      const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), cleanupAbort.signal]);
       try {
-        const r = await fetch(`${PROXY_URL}/_api/endpoints`, { signal: AbortSignal.timeout(5000) });
-        if (active) setStatus(r.ok ? "operational" : "degraded");
-      } catch {
-        if (active) setStatus("degraded");
+        const r = await fetch(`${PROXY_URL}/_api/endpoints`, { signal });
+        return r.ok ? "ok" : "failed";
+      } catch (e) {
+        // AbortError covers both our own timeout and effect cleanup (nav away /
+        // dev double-mount) — neither means the proxy is actually unreachable.
+        return (e as Error)?.name === "AbortError" ? "aborted" : "failed";
       }
+    }
+
+    (async () => {
+      const first = await check(5000);
+      if (!active) return;
+      if (first === "ok") {
+        setStatus("operational");
+        return;
+      }
+
+      // Genuine failure or an ambiguous abort — either way, give it one real
+      // retry before ever declaring degraded. Stay in "checking" meanwhile.
+      setStatus("checking");
+      await sleep(3000);
+      if (!active) return;
+
+      const second = await check(8000);
+      if (!active) return;
+      if (second === "ok") setStatus("operational");
+      else if (second === "aborted") setStatus("checking");
+      else setStatus("degraded");
     })();
-    return () => { active = false; };
+
+    return () => {
+      active = false;
+      cleanupAbort.abort();
+    };
   }, []);
 
   return (

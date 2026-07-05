@@ -11,6 +11,22 @@ const VERIFY_HEADER_EXAMPLE = `app.get("/data", (_req, res) => {
   res.json({ ok: true });
 });`;
 
+const SAMPLE_ORIGIN_EXAMPLE = `const express = require("express");
+const app = express();
+
+// Your paid route — return whatever data you're selling.
+app.get("/data", (_req, res) => {
+  res.set("X-Stent-Verify", "YOUR-TOKEN-HERE"); // option 2: header
+  res.json({ hello: "world", ts: Date.now() });
+});
+
+// Option 1: root verification file (checked first).
+app.get("/stent-verification.txt", (_req, res) =>
+  res.type("text/plain").send("YOUR-TOKEN-HERE")
+);
+
+app.listen(process.env.PORT || 3000);`;
+
 const SDK_EXAMPLE = `// npm install stent-sdk
 import { StentClient } from "stent-sdk";
 
@@ -45,6 +61,7 @@ export default function DocsPage() {
       <section className="docs-layout">
         <nav className="docs-index" aria-label="Docs sections">
           <a href="#publish">Publish</a>
+          <a href="#sample-origin">No API yet?</a>
           <a href="#verify">Verify ownership</a>
           <a href="#paid-request">Paid request</a>
           <a href="#api">Proxy API</a>
@@ -65,6 +82,21 @@ export default function DocsPage() {
               <li>Verify ownership with a file or response header.</li>
               <li>Run the paywall check and paid request from the success screen.</li>
             </ol>
+          </section>
+
+          <section id="sample-origin" className="doc-section">
+            <h2>No API yet?</h2>
+            <p>
+              Stent forwards to an existing HTTPS endpoint you already run — it doesn&apos;t host
+              your API. If you don&apos;t have one, a minimal Express server is enough to try the
+              full flow: one route returning JSON, plus the verification token from either the
+              root file or the response header (Stent checks the file first, then the header).
+            </p>
+            <CodeBlock code={SAMPLE_ORIGIN_EXAMPLE} filename="server.js" />
+            <p>
+              Deploy it to a free host like Railway, Render, or Fly.io to get a public HTTPS URL,
+              then paste that URL into step 1 of the publish wizard.
+            </p>
           </section>
 
           <section id="verify" className="doc-section">
