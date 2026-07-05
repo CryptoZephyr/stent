@@ -1,10 +1,12 @@
 # Stent
 
-Stent is an x402 reverse proxy for monetizing existing APIs per request. A
-publisher registers an HTTPS endpoint, sets a USDC price, proves control of the
-origin, and receives a public Stent URL. An agent calls that URL with a wallet;
-the proxy verifies payment, fetches the upstream response, logs the payment, and
-settles through Circle Gateway on Arc testnet.
+Stent turns an existing API into a paywalled, per-request service in about 30
+seconds, with zero code changes to the origin server: no publisher accounts, no
+API keys, no smart contracts, no Solidity. A publisher registers an HTTPS
+endpoint, sets a USDC price, proves control of the origin, and receives a public
+Stent URL. An agent calls that URL with a wallet; the proxy verifies payment,
+fetches the upstream response, logs the payment, and settles through Circle
+Gateway on Arc testnet.
 
 The goal is narrow: let software buy API calls without publisher-specific API
 keys, subscriptions, invoices, or custom contracts. The publisher keeps their
@@ -12,13 +14,50 @@ server unchanged; Stent sits in front of it.
 
 Built for the Lepton Agents Hackathon, Canteen x Circle x Arc, June 2026.
 
+## Try It Now
+
+The SDK is on npm and the proxy/dashboard are deployed live on Arc testnet.
+This pays the live `/arc-stats` endpoint ($0.001/call) through the deployed
+proxy:
+
+```bash
+npm install stent-sdk
+```
+
+```ts
+import { StentClient } from "stent-sdk";
+
+const client = new StentClient({
+  privateKey: process.env.BUYER_PRIVATE_KEY as `0x${string}`, // agent wallet
+  spendCapUsdc: 1,
+});
+
+// One-time: fund the wallet from https://faucet.circle.com, then
+// await client.deposit("10") to move USDC into the Gateway balance.
+
+const data = await client.fetch(
+  "https://stentproxy-production.up.railway.app/arc-stats"
+);
+console.log(data);
+```
+
+- Live dashboard: https://stent-dashboard.vercel.app
+- Live proxy directory: https://stentproxy-production.up.railway.app/_api/endpoints
+- Package: https://www.npmjs.com/package/stent-sdk
+
+End-to-end (agent pays, proxy verifies and settles, ledger row lands in
+Supabase) was rehearsed live on Arc testnet on July 5, 2026, with a LangChain
+agent making autonomous tool calls, unique nonces per payment, and the Gateway
+balance reconciled to the cent across runs.
+
 ## What Exists In This Repository
 
 - `apps/proxy` - Express reverse proxy, x402 payment gateway, publisher
   registration API, endpoint cache, rate limiting, upstream forwarding, and
   payment logging.
 - `apps/dashboard` - Next.js dashboard for publishing APIs, browsing the
-  marketplace, watching payment activity, and naming agent wallets.
+  marketplace, watching live agent activity on the Runs screen (`/console`)
+  and the Payments feed (`/live`), and naming agent wallets.
 - `packages/sdk` - `stent-sdk`, a TypeScript client around Circle Gateway's
   x402 client with a spend cap and spend accounting.
 - `apps/demo-origin` - Payment-unaware upstream API used for local and deployed
@@ -69,7 +108,7 @@ Publisher API
 apps/dashboard
   |-- publish flow             -> proxy /_api/endpoints
   |-- marketplace/status       -> proxy public API
-  |-- live economy/console     -> Supabase public reads + Realtime
+  |-- Runs + Payments screens  -> Supabase public reads + Realtime
   |-- agent claim route        -> Supabase service role after wallet auth
 ```
 
@@ -118,8 +157,8 @@ Supabase stores four public domains:
   limits, verification token, verification state, active state.
 - `payments` - payment audit rows keyed by unique Gateway authorization nonce.
 - `agents` - optional public names/descriptions for agent wallets.
-- `agent_runs` and `agent_run_steps` - agent lifecycle events shown in the Agent
-  Console.
+- `agent_runs` and `agent_run_steps` - agent lifecycle events shown on the
+  dashboard's Runs screen (`/console`).
 
 RLS is enabled. Public clients can read safe public data. The service role writes
 endpoint, payment, agent, and run rows from trusted server code. Migration
@@ -129,28 +168,8 @@ the origin URL or verification secret.
 
 ## SDK
 
-The SDK lives in `packages/sdk` as workspace package `stent-sdk`. It is
-published to npm:
-
-```bash
-npm install stent-sdk
-```
-
-```ts
-import { StentClient } from "stent-sdk";
-
-const client = new StentClient({
-  privateKey: process.env.BUYER_PRIVATE_KEY as `0x${string}`,
-  spendCapUsdc: 1,
-});
-
-// One-time setup: get testnet USDC from https://faucet.circle.com, then fund
-// the Gateway balance this client pays from.
-await client.deposit("10");
-
-const data = await client.fetch("https://stentproxy-production.up.railway.app/arc-stats");
-console.log(data);
-```
+The SDK lives in `packages/sdk` as workspace package `stent-sdk` and is
+published to npm (see "Try It Now" above for the install and pay snippet).
 
 `StentClient` delegates x402 discovery, signing, retry, and settlement handling
 to `@circle-fin/x402-batching`. Stent adds a client-side cumulative spend cap,
